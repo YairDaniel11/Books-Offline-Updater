@@ -38,7 +38,7 @@ flutter build windows --release   # או: flutter build macos --release
 
 הקובץ `.github/workflows/build.yml` רץ ב-`workflow_dispatch` וב-push של תג `v*`.
 הוא בונה ל-Windows ול-macOS, מריץ ניתוח ובדיקות, ומעלה artifacts:
-`BooksOfflineUpdate-windows.zip` ו-`BooksOfflineUpdate-macos.zip`. בריצת תג נוצר גם GitHub Release
+`BooksOfflineUpdate.exe` (Windows, קובץ יחיד בלי התקנה) ו-`BooksOfflineUpdate-macos.zip`. בריצת תג נוצר גם GitHub Release
 עם שני הזיפים.
 
 ## הערה ל-Mac
