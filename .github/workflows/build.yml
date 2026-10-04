@@ -2,7 +2,14 @@ name: Build
 
 on:
   workflow_dispatch:
+  # ריצה אוטומטית בכל שינוי בקוד (בלי קבצי תיעוד); תג v* מפרסם גם Release
   push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
     tags: ['v*']
 
 env:
@@ -41,11 +48,24 @@ jobs:
       - name: בנייה
         run: flutter build ${{ matrix.platform }} --release
 
-      # אריזה (Windows)
-      - name: אריזת zip (Windows)
+      # אריזה (Windows): exe יחיד שרץ בלי התקנה (7-Zip SFX). הוא מחלץ את עצמו לתיקייה זמנית
+      # ומריץ משם; התוכנה מזהה את ה-exe המקורי ושומרת את ה-PAK לידו.
+      - name: אריזת exe יחיד (Windows)
         if: matrix.platform == 'windows'
         shell: pwsh
-        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath BooksOfflineUpdate-windows.zip
+        run: |
+          Invoke-WebRequest https://www.7-zip.org/a/7zr.exe -OutFile 7zr.exe
+          Invoke-WebRequest https://www.7-zip.org/a/lzma2301.7z -OutFile lzma.7z
+          ./7zr.exe x -y -olzma lzma.7z | Out-Null
+          ./7zr.exe a -mx=9 payload.7z ./build/windows/x64/runner/Release/* | Out-Null
+          $cfg = ";!@Install@!UTF-8!`nTitle=`"עדכון אופליין - מאגר ספרים`"`nRunProgram=`"books_offline_update.exe`"`nGUIMode=`"2`"`n;!@InstallEnd@!`n"
+          [IO.File]::WriteAllText("$PWD\cfg.txt", $cfg, (New-Object Text.UTF8Encoding($false)))
+          $out = [IO.File]::Create("$PWD\BooksOfflineUpdate.exe")
+          foreach ($f in @("lzma/bin/7zS2.sfx", "cfg.txt", "payload.7z")) {
+            $b = [IO.File]::ReadAllBytes("$PWD\$f"); $out.Write($b, 0, $b.Length)
+          }
+          $out.Close()
+          Get-Item BooksOfflineUpdate.exe | Select-Object Name, Length
 
       # אריזה (macOS) - ללא חתימה; Gatekeeper יתריע בפעם הראשונה (ראו README)
       - name: אריזת zip (macOS)
@@ -55,7 +75,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: BooksOfflineUpdate-${{ matrix.platform }}
-          path: BooksOfflineUpdate-${{ matrix.platform }}.zip
+          path: |
+            BooksOfflineUpdate.exe
+            BooksOfflineUpdate-macos.zip
+          if-no-files-found: ignore
 
   release:
     # יצירת Release רק בריצת תג
@@ -71,4 +94,6 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
+          files: |
+            dist/BooksOfflineUpdate.exe
+            dist/BooksOfflineUpdate-macos.zip

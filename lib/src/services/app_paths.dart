@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'windows_parent.dart';
+
 const pakFileName = 'OtzariaBooks.pak';
 
 /// מיקומי הקבצים של התוכנה: ה-PAK וההגדרות יושבים ליד התוכנה (כך הכול עובר יחד בדיסק און קי),
@@ -12,6 +14,17 @@ class AppPaths {
   /// התיקייה שבה התוכנה רצה. ב-Mac זו התיקייה שמכילה את ה-.app.
   static String programDir() {
     final exe = Platform.resolvedExecutable;
+    if (Platform.isWindows) {
+      // exe יחיד (SFX): התוכנה מחולצת לתיקייה זמנית של 7-Zip, והאב שלה הוא ה-exe המקורי.
+      final dir = p.dirname(exe);
+      final temp = (Platform.environment['TEMP'] ?? Platform.environment['TMP'] ?? '').toLowerCase();
+      if (temp.isNotEmpty &&
+          p.basename(dir).startsWith('7z') &&
+          p.dirname(dir).toLowerCase() == p.normalize(temp)) {
+        final parent = windowsParentExecutable();
+        if (parent != null) return p.dirname(parent);
+      }
+    }
     final marker = '.app${Platform.pathSeparator}Contents${Platform.pathSeparator}MacOS';
     final i = exe.indexOf(marker);
     if (i >= 0) return p.dirname(exe.substring(0, i + 4));
