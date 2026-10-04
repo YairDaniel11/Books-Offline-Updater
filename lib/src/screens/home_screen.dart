@@ -31,6 +31,7 @@ class HomeScreen extends StatelessWidget {
         final busy = c.busy;
         final canNetwork = c.online && !c.readOnly;
         final updates = c.pendingTargets(onlyUpdates: true);
+        final notDownloaded = c.pendingTargets(onlyUpdates: false).length - updates.length;
         final theme = Theme.of(context);
 
         Widget row(String k, String v) => Padding(
@@ -80,41 +81,54 @@ class HomeScreen extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (!c.hasData)
-                            FilledButton.icon(
-                              onPressed: canNetwork && !busy
-                                  ? () => c.downloadTargets(
-                                        c.pendingTargets(onlyUpdates: false),
-                                        title: 'מוריד את כל המאגר',
-                                        includeLinks: true,
-                                      )
-                                  : null,
-                              icon: const Icon(FluentIcons.arrow_download_24_regular),
-                              label: const Text('הורד את כל המאגר'),
-                            )
-                          else
-                            Wrap(
-                              spacing: AppTokens.spaceSM,
-                              runSpacing: AppTokens.spaceSM,
-                              children: [
-                                OutlinedButton.icon(
-                                  onPressed: c.online && !busy && !c.checkingOnline ? c.checkOnline : null,
-                                  icon: const Icon(FluentIcons.arrow_sync_24_regular),
-                                  label: const Text('בדוק עדכונים'),
+                          Wrap(
+                            spacing: AppTokens.spaceSM,
+                            runSpacing: AppTokens.spaceSM,
+                            children: [
+                              // "הורד הכול": כל מה שעוד לא ירד (וגם עדכונים), בלחיצה אחת.
+                              if (!c.hasData || notDownloaded > 0)
+                                FilledButton.icon(
+                                  onPressed: canNetwork && !busy && !c.checkingOnline
+                                      ? () => c.downloadTargets(
+                                            c.pendingTargets(onlyUpdates: false),
+                                            title: 'מוריד את כל המאגר',
+                                            includeLinks: true,
+                                          )
+                                      : null,
+                                  icon: const Icon(FluentIcons.arrow_download_24_regular),
+                                  label: Text(c.hasData ? 'הורד את כל המאגר ($notDownloaded לא הורדו)' : 'הורד את כל המאגר'),
                                 ),
+                              if (c.hasData && updates.isNotEmpty && notDownloaded == 0)
                                 FilledButton.icon(
                                   onPressed: canNetwork && !busy
                                       ? () => c.downloadTargets(
                                             updates,
                                             title: 'מוריד עדכונים',
-                                            includeLinks: c.dorotStatus() != ItemStatus.ok,
+                                            includeLinks: true,
                                           )
                                       : null,
                                   icon: const Icon(FluentIcons.arrow_download_24_regular),
                                   label: Text('הורד עדכונים (${updates.length})'),
                                 ),
-                              ],
-                            ),
+                              if (c.hasData && updates.isNotEmpty && notDownloaded > 0)
+                                OutlinedButton.icon(
+                                  onPressed: canNetwork && !busy
+                                      ? () => c.downloadTargets(
+                                            updates,
+                                            title: 'מוריד עדכונים',
+                                            includeLinks: true,
+                                          )
+                                      : null,
+                                  icon: const Icon(FluentIcons.arrow_download_24_regular),
+                                  label: Text('הורד רק עדכונים (${updates.length})'),
+                                ),
+                              OutlinedButton.icon(
+                                onPressed: c.online && !busy && !c.checkingOnline ? c.checkOnline : null,
+                                icon: const Icon(FluentIcons.arrow_sync_24_regular),
+                                label: const Text('בדוק עדכונים'),
+                              ),
+                            ],
+                          ),
                           if (!canNetwork) ...[
                             const SizedBox(height: AppTokens.spaceSM),
                             Text(

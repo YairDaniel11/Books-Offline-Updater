@@ -76,7 +76,7 @@ class _AppShellState extends State<AppShell> {
               children: [
                 if (c.lastMessage != null || c.activity != null)
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(AppTokens.spaceMD, AppTokens.spaceMD, AppTokens.spaceMD, 0),
+                    padding: const EdgeInsets.fromLTRB(AppTokens.spaceMD, AppTokens.spaceXL, AppTokens.spaceMD, 0),
                     child: Center(
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: AppTokens.contentMaxWidth),

@@ -347,6 +347,12 @@ class AppController extends ChangeNotifier {
 
   Future<void> downloadTargets(List<BookItem> targets, {required String title, bool includeLinks = false}) async {
     if (busy || pak == null || pak!.readOnly) return;
+    // "קישורים": ה-zip של תיקיית הקישורים כולל את כל הקבצים שבה (גם דורות.csv); רק בלעדיו מורידים את דורות.csv לבדו.
+    final links = linksItem;
+    final linksViaZip = includeLinks && links != null;
+    if (linksViaZip && !targets.any((t) => t.path == links.path)) {
+      if (statusOf(links) != ItemStatus.ok || dorotStatus() != ItemStatus.ok) targets = [...targets, links];
+    }
     if (targets.isEmpty && !includeLinks) {
       _msg('הכול כבר מעודכן');
       return;
@@ -365,7 +371,11 @@ class AppController extends ChangeNotifier {
         failed.addAll(r.failed);
       }
       if (includeLinks && !activity!.cancelled) {
-        await _downloadLinks(failed);
+        if (!linksViaZip) {
+          if (dorotStatus() != ItemStatus.ok) await _downloadLinks(failed);
+        } else if (statusOf(links) == ItemStatus.ok && dorotFile != null) {
+          hashes[dorotFile!.path] = dorotFile!.hash;
+        }
       }
       await _applyRemovalsToPak();
       lastUpdated = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -510,8 +520,9 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _maybeCompact() async {
+    // בלוקים שהוחלפו ואינדקסים ישנים: מצמצמים אוטומטית כשהם שווים את הכתיבה מחדש.
     final dead = pak!.deadBytes;
-    if (dead < 50 * 1024 * 1024 || dead < pak!.fileLength * 0.1) return;
+    if (dead < 2 * 1024 * 1024 || dead < pak!.fileLength * 0.03) return;
     await compactNow(silent: true);
   }
 

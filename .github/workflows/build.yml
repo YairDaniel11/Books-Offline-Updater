@@ -57,6 +57,9 @@ jobs:
           Invoke-WebRequest https://www.7-zip.org/a/7zr.exe -OutFile 7zr.exe
           Invoke-WebRequest https://www.7-zip.org/a/lzma2301.7z -OutFile lzma.7z
           ./7zr.exe x -y -olzma lzma.7z | Out-Null
+          # אייקון התוכנה גם על קובץ ה-exe היחיד
+          Invoke-WebRequest https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe -OutFile rcedit.exe
+          ./rcedit.exe lzma/bin/7zS2.sfx --set-icon windows/runner/resources/app_icon.ico
           ./7zr.exe a -mx=9 payload.7z ./build/windows/x64/runner/Release/* | Out-Null
           $cfg = ";!@Install@!UTF-8!`nTitle=`"עדכון אופליין - מאגר ספרים`"`nRunProgram=`"books_offline_update.exe`"`nGUIMode=`"2`"`n;!@InstallEnd@!`n"
           [IO.File]::WriteAllText("$PWD\cfg.txt", $cfg, (New-Object Text.UTF8Encoding($false)))
