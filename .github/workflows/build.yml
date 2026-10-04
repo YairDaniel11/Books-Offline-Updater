@@ -59,7 +59,8 @@ jobs:
           ./7zr.exe x -y -olzma lzma.7z | Out-Null
           # אייקון התוכנה גם על קובץ ה-exe היחיד
           Invoke-WebRequest https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe -OutFile rcedit.exe
-          ./rcedit.exe lzma/bin/7zS2.sfx --set-icon windows/runner/resources/app_icon.ico
+          # מניפסט asInvoker: בלעדיו Windows מזהה את השם "Update" כתוכנת התקנה ומציג מגן UAC ואישור מנהל
+          ./rcedit.exe lzma/bin/7zS2.sfx --set-icon windows/runner/resources/app_icon.ico --application-manifest windows/runner/sfx.manifest
           ./7zr.exe a -mx=9 payload.7z ./build/windows/x64/runner/Release/* | Out-Null
           $cfg = ";!@Install@!UTF-8!`nTitle=`"עדכון אופליין - מאגר ספרים`"`nRunProgram=`"books_offline_update.exe`"`nGUIMode=`"2`"`n;!@InstallEnd@!`n"
           [IO.File]::WriteAllText("$PWD\cfg.txt", $cfg, (New-Object Text.UTF8Encoding($false)))
