@@ -1,0 +1,74 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: macos-latest
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: הפעלת פלטפורמת שולחן עבודה
+        run: flutter config --enable-${{ matrix.platform }}-desktop
+
+      - run: flutter pub get
+
+      - name: ניתוח סטטי
+        run: flutter analyze
+        continue-on-error: true
+
+      - run: flutter test
+
+      - name: בנייה
+        run: flutter build ${{ matrix.platform }} --release
+
+      # אריזה (Windows)
+      - name: אריזת zip (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath BooksOfflineUpdate-windows.zip
+
+      # אריזה (macOS) - ללא חתימה; Gatekeeper יתריע בפעם הראשונה (ראו README)
+      - name: אריזת zip (macOS)
+        if: matrix.platform == 'macos'
+        run: ditto -c -k --keepParent build/macos/Build/Products/Release/*.app BooksOfflineUpdate-macos.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BooksOfflineUpdate-${{ matrix.platform }}
+          path: BooksOfflineUpdate-${{ matrix.platform }}.zip
+
+  release:
+    # יצירת Release רק בריצת תג
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
