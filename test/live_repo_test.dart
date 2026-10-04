@@ -14,7 +14,7 @@ void main() {
     final small = snap.items.where((i) => i.depth == 0 && i.size.endsWith('KB')).first;
     final tmp = await Directory.systemTemp.createTemp('live_');
     final zip = p.join(tmp.path, small.zip);
-    await repo.downloadZip(small, zip, onProgress: (_, __) {}, isCancelled: () => false);
+    await repo.downloadZip(small, zip, onProgress: (a, b) {}, isCancelled: () => false);
     final pak = await PakFile.openOrCreate(p.join(tmp.path, 'x.pak'));
     final seen = await pak.ingestZip(zip, small.path);
     await pak.commit();
