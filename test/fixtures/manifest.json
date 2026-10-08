@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "library_id": "otzarya-unofficial-books",
+  "db_version": 6,
+  "release_notes": "עדכון אוטומטי, גרסה 6, קומיט f754b46, 08.10.2026 11:27",
+  "full": {
+    "compression": "zstd",
+    "size": 1138581504,
+    "sha256": "3b4600d2f29940f5ee4569ff017a734ed7d3f6af49362567738f1702abc13952",
+    "parts": [
+      {
+        "url": "https://github.com/YairDaniel11/Otzarya-Unofficial-Books/releases/download/db-v6/otzarya-unofficial-books-6.db.zst",
+        "size": 464548738,
+        "sha256": "e88f55fe25e89590a0b68f507cb74a5ac47475c2424b2524f745767570485c6b"
+      }
+    ]
+  },
+  "delta": [
+    {
+      "from_db_version": 5,
+      "from_sha256": "e0637667e910b9fc6873dab91c5eea42c9ae5033bc3600c24a44b54eb57b3751",
+      "compression": "zstd-patch",
+      "size": 1138581504,
+      "sha256": "3b4600d2f29940f5ee4569ff017a734ed7d3f6af49362567738f1702abc13952",
+      "parts": [
+        {
+          "url": "https://github.com/YairDaniel11/Otzarya-Unofficial-Books/releases/download/db-v6/otzarya-unofficial-books-6.db.from-5.patch.zst",
+          "size": 405573862,
+          "sha256": "4e72d63d211a3d91c2c65c83eaf767c90e42dc030beb6bf4d8560e2e5540ce55"
+        }
+      ]
+    },
+    {
+      "from_db_version": 4,
+      "from_sha256": "eb9fa3d7b85b3fb8d7837b5a3be6daa33bf58cb90403cc067cc10b425c39cbbf",
+      "compression": "zstd-patch",
+      "size": 1138581504,
+      "sha256": "3b4600d2f29940f5ee4569ff017a734ed7d3f6af49362567738f1702abc13952",
+      "parts": [
+        {
+          "url": "https://github.com/YairDaniel11/Otzarya-Unofficial-Books/releases/download/db-v6/otzarya-unofficial-books-6.db.from-4.patch.zst",
+          "size": 405573862,
+          "sha256": "4e72d63d211a3d91c2c65c83eaf767c90e42dc030beb6bf4d8560e2e5540ce55"
+        }
+      ]
+    }
+  ]
+}

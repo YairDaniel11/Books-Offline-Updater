@@ -41,6 +41,9 @@ dependencies:
   path: ^1.9.1
   fluentui_system_icons: ^1.1.273
   ffi: ^2.2.0
+  zstandard: ^1.5.0
+  zstandard_native: ^1.5.0
+  ed25519_edwards: ^0.3.2
 
 dev_dependencies:
   flutter_test:

@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 
 import '../controllers/app_controller.dart';
+import '../db/db_controller.dart';
 import '../theme/app_tokens.dart';
 import '../widgets/activity_card.dart';
 import '../widgets/message_banner.dart';
+import 'db_screen.dart';
 import 'extract_screen.dart';
 import 'home_screen.dart';
 import 'library_screen.dart';
@@ -22,8 +24,23 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   int _index = 0;
+  late final DbController _db = DbController(widget.controller);
+  bool _dbStarted = false;
 
-  void _goTo(int i) => setState(() => _index = i);
+  @override
+  void dispose() {
+    _db.dispose();
+    super.dispose();
+  }
+
+  void _goTo(int i) {
+    setState(() => _index = i);
+    // בדיקת הרשת של המסד רק כשנכנסים ללשונית (לא בכל פתיחה של התוכנה).
+    if (i == 3 && !_dbStarted) {
+      _dbStarted = true;
+      _db.init();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -37,6 +54,7 @@ class _AppShellState extends State<AppShell> {
       HomeScreen(controller: c, onNavigate: _goTo),
       LibraryScreen(controller: c),
       ExtractScreen(controller: c),
+      DbScreen(db: _db),
       SettingsScreen(controller: c),
     ];
 
@@ -62,6 +80,11 @@ class _AppShellState extends State<AppShell> {
                 icon: Icon(FluentIcons.arrow_download_24_regular),
                 selectedIcon: Icon(FluentIcons.arrow_download_24_filled),
                 label: Text('חילוץ'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(FluentIcons.database_24_regular),
+                selectedIcon: Icon(FluentIcons.database_24_filled),
+                label: Text('מסד'),
               ),
               NavigationRailDestination(
                 icon: Icon(FluentIcons.settings_24_regular),
