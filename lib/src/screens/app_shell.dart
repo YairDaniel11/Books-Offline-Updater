@@ -44,14 +44,7 @@ class _AppShellState extends State<AppShell> {
     super.dispose();
   }
 
-  void _goTo(int i) {
-    setState(() => _index = i);
-    // בדיקת הרשת של המסד רק כשנכנסים ללשונית (לא בכל פתיחה של התוכנה).
-    if (i == 3 && !_dbStarted) {
-      _dbStarted = true;
-      _db.init();
-    }
-  }
+  void _goTo(int i) => setState(() => _index = i);
 
   @override
   Widget build(BuildContext context) {
@@ -68,9 +61,9 @@ class _AppShellState extends State<AppShell> {
 
     final screens = <Widget>[
       HomeScreen(controller: c, db: _db, onNavigate: _goTo),
+      DbScreen(db: _db),
       LibraryScreen(controller: c),
       ExtractScreen(controller: c),
-      DbScreen(db: _db),
       SettingsScreen(controller: c, update: _update),
     ];
 
@@ -88,19 +81,19 @@ class _AppShellState extends State<AppShell> {
                 label: Text('בית'),
               ),
               NavigationRailDestination(
+                icon: Icon(FluentIcons.database_24_regular),
+                selectedIcon: Icon(FluentIcons.database_24_filled),
+                label: Text('מסד ספרים (DB)', textAlign: TextAlign.center),
+              ),
+              NavigationRailDestination(
                 icon: Icon(FluentIcons.library_24_regular),
                 selectedIcon: Icon(FluentIcons.library_24_filled),
-                label: Text('ספרייה'),
+                label: Text('ספרים בפורמט TXT', textAlign: TextAlign.center),
               ),
               NavigationRailDestination(
                 icon: Icon(FluentIcons.arrow_download_24_regular),
                 selectedIcon: Icon(FluentIcons.arrow_download_24_filled),
                 label: Text('חילוץ'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(FluentIcons.database_24_regular),
-                selectedIcon: Icon(FluentIcons.database_24_filled),
-                label: Text('מסד'),
               ),
               NavigationRailDestination(
                 icon: Icon(FluentIcons.settings_24_regular),

@@ -12,7 +12,7 @@ class HomeScreen extends StatelessWidget {
   final AppController controller;
   final DbController db;
 
-  /// מעבר ללשונית לפי אינדקס (2 = חילוץ).
+  /// מעבר ללשונית לפי אינדקס (1 = מסד, 3 = חילוץ).
   final ValueChanged<int> onNavigate;
 
   static String _date(int? epochSeconds) {
@@ -80,7 +80,7 @@ class HomeScreen extends StatelessWidget {
                     _DbCard(db: db, onNavigate: onNavigate),
                     const SizedBox(height: AppTokens.spaceMD),
                     AppCard(
-                      title: 'עדכון מהרשת',
+                      title: 'ספרים בפורמט TXT',
                       icon: FluentIcons.cloud_arrow_down_24_regular,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -156,7 +156,7 @@ class HomeScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: AppTokens.spaceMD),
                           FilledButton.tonalIcon(
-                            onPressed: () => onNavigate(2),
+                            onPressed: () => onNavigate(3),
                             icon: const Icon(FluentIcons.arrow_left_24_regular),
                             label: const Text('למסך החילוץ'),
                           ),
@@ -214,7 +214,7 @@ class _DbCard extends StatelessWidget {
     final m = db.remote?.manifest;
     final a = db.activity;
     return AppCard(
-      title: 'מסד אוצריא',
+      title: 'מסד ספרים מותאמים לאוצריא',
       icon: FluentIcons.database_24_regular,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -246,12 +246,12 @@ class _DbCard extends StatelessWidget {
               OutlinedButton.icon(
                 onPressed: () {
                   db.setMode(DbDownloadMode.updatesOnly);
-                  onNavigate(3);
+                  onNavigate(1);
                 },
                 icon: const Icon(FluentIcons.arrow_sync_24_regular),
                 label: const Text('קבצי עדכון בלבד'),
               ),
-              TextButton(onPressed: () => onNavigate(3), child: const Text('כל אפשרויות המסד')),
+              TextButton(onPressed: () => onNavigate(1), child: const Text('כל אפשרויות המסד')),
             ],
           ),
           if (a != null) ...[
