@@ -5,12 +5,10 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../controllers/app_controller.dart';
+import '../services/app_paths.dart';
 import '../services/repo_service.dart' show DownloadCancelled;
 import 'db_manifest.dart';
 import 'db_service.dart';
-
-/// מה להוריד למראה.
-enum DbDownloadMode { full, updatesOnly }
 
 enum InstallAction { none, delta, full, blocked }
 
@@ -55,9 +53,7 @@ class DbController extends ChangeNotifier {
   LocalDbInfo? local;
   bool inspecting = false;
 
-  DbDownloadMode mode = DbDownloadMode.updatesOnly;
-
-  /// גרסת המקור של קובץ העדכון להורדה; `null` = כל קובצי העדכון.
+  /// גרסת המסד במחשב היעד (להכנה להעברה): עם גרסה מוכרת יורד רק קובץ העדכון שלה, בלעדיה המסד המלא.
   int? fromVersion;
 
   DbActivity? activity;
@@ -65,6 +61,28 @@ class DbController extends ChangeNotifier {
   bool messageIsError = false;
 
   bool _cancel = false;
+
+  /// SHA-256 של המסד שנבדק לאחרונה, לפי (גודל, זמן שינוי), כדי לא לקרוא מחדש ~1GB בכל הפעלה.
+  Map<String, dynamic> _shaCache = {};
+
+  Future<String?> _cachedSha(String path) async {
+    try {
+      final st = await File(path).stat();
+      final c = _shaCache;
+      if (c['path'] == path && c['size'] == st.size && c['mtime'] == st.modified.millisecondsSinceEpoch) {
+        return c['sha'] as String?;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _rememberSha(String path, String sha) async {
+    try {
+      final st = await File(path).stat();
+      _shaCache = {'path': path, 'size': st.size, 'mtime': st.modified.millisecondsSinceEpoch, 'sha': sha};
+      await _save();
+    } catch (_) {}
+  }
   DateTime _lastNotify = DateTime.fromMillisecondsSinceEpoch(0);
   bool _loaded = false;
 
@@ -72,7 +90,8 @@ class DbController extends ChangeNotifier {
 
   // ─── אתחול והגדרות ────────────────────────────────────────────────
 
-  File get _settingsFile => File(p.join(_app.dataDir, 'db_settings.json'));
+  /// פר-מחשב: מיקום המסד זכור כאן, ולא נוסע עם התוכנה בדיסק און קי.
+  File get _settingsFile => File(p.join(AppPaths.userConfigDir(), 'db_settings.json'));
 
   Future<void> init() async {
     if (!_loaded) {
@@ -84,7 +103,8 @@ class DbController extends ChangeNotifier {
         if (m is String && m.isNotEmpty) mirrorDir = m;
         final t = j['targetDb'];
         if (t is String) targetDb = t;
-        mode = j['mode'] == 'full' ? DbDownloadMode.full : DbDownloadMode.updatesOnly;
+        final c = j['shaCache'];
+        if (c is Map<String, dynamic>) _shaCache = c;
       } catch (_) {}
     }
     await refreshMirror();
@@ -95,10 +115,11 @@ class DbController extends ChangeNotifier {
 
   Future<void> _save() async {
     try {
+      await _settingsFile.parent.create(recursive: true);
       await _settingsFile.writeAsString(jsonEncode({
         'mirrorDir': mirrorDir,
         'targetDb': targetDb,
-        'mode': mode == DbDownloadMode.full ? 'full' : 'updates',
+        'shaCache': _shaCache,
       }));
     } catch (_) {}
   }
@@ -111,12 +132,6 @@ class DbController extends ChangeNotifier {
 
   void clearMessage() {
     message = null;
-    notifyListeners();
-  }
-
-  void setMode(DbDownloadMode m) {
-    mode = m;
-    _save();
     notifyListeners();
   }
 
@@ -162,6 +177,7 @@ class DbController extends ChangeNotifier {
     }
     checking = false;
     notifyListeners();
+    if (remote != null && targetDb.isNotEmpty && local == null && !busy) await inspectTarget();
   }
 
   // ─── מראה ─────────────────────────────────────────────────────────
@@ -207,7 +223,8 @@ class DbController extends ChangeNotifier {
     inspecting = true;
     notifyListeners();
     try {
-      local = await _service.inspectLocalDb(m, targetDb);
+      local = await _service.inspectLocalDb(m, targetDb, knownSha: await _cachedSha(targetDb));
+      await _rememberSha(targetDb, local!.sha256);
     } catch (e) {
       _msg('לא ניתן לקרוא את הקובץ: $e', error: true);
     }
@@ -229,11 +246,10 @@ class DbController extends ChangeNotifier {
           _msg('המסד שבחרתם כבר בגרסה העדכנית (${m.version}).');
         case LocalDbState.hasDelta:
           fromVersion = info.version;
-          mode = DbDownloadMode.updatesOnly;
-          _msg('זוהתה גרסה ${info.version}. נבחר קובץ העדכון המתאים.');
+          _msg('זוהתה גרסה ${info.version}. יורד רק קובץ העדכון המתאים.');
         case LocalDbState.unknown:
-          mode = DbDownloadMode.full;
-          _msg('הגרסה אינה מזוהה, או שהיא ישנה מדי לקובץ עדכון. מומלץ להוריד את המסד המלא.', error: true);
+          fromVersion = null;
+          _msg('הגרסה אינה מזוהה, או שהיא ישנה מדי לעדכון חלקי. יורד המסד המלא.', error: true);
       }
     } catch (e) {
       _msg('לא ניתן לקרוא את הקובץ: $e', error: true);
@@ -247,13 +263,12 @@ class DbController extends ChangeNotifier {
   List<DbArtifact> get selectedDownload {
     final m = remote?.manifest;
     if (m == null) return const [];
-    if (mode == DbDownloadMode.full) return [m.full];
     final v = fromVersion;
     if (v != null) {
       final d = m.deltaForVersion(v);
-      return d == null ? const [] : [d];
+      if (d != null) return [d];
     }
-    return m.deltas;
+    return [m.full];
   }
 
   /// כמה בתים עוד חסרים במראה עבור הבחירה הנוכחית.
@@ -278,7 +293,7 @@ class DbController extends ChangeNotifier {
     }
     message = null;
     _cancel = false;
-    activity = DbActivity(mode == DbDownloadMode.full ? 'מוריד את המסד המלא' : 'מוריד קבצי עדכון');
+    activity = DbActivity(list.first.isDelta ? 'מוריד קובץ עדכון' : 'מוריד את המסד המלא');
     notifyListeners();
     try {
       await _service.download(r, list, mirrorDir, onProgress: _progress, isCancelled: () => _cancel);
@@ -291,6 +306,69 @@ class DbController extends ChangeNotifier {
     activity = null;
     await refreshMirror();
     if (targetDb.isNotEmpty) await inspectTarget();
+  }
+
+  // ─── עדכון בלחיצה אחת (מחשב מחובר) ───────────────────────────────
+
+  /// מזהה את גרסת המסד שבמחשב הזה, מוריד רק מה שדרוש (קובץ עדכון, או המסד המלא כשאין ברירה),
+  /// מתקין במקום ומנקה את קבצי ההורדה. המשתמש לא צריך לדעת מה סוג הקובץ.
+  Future<void> updateNow() async {
+    final r = remote;
+    if (r == null || busy || targetDb.isEmpty) return;
+    final m = r.manifest;
+    message = null;
+    _cancel = false;
+    activity = DbActivity('בודק את המסד');
+    notifyListeners();
+    try {
+      DbArtifact artifact = m.full;
+      if (await File(targetDb).exists()) {
+        final info = await _service.inspectLocalDb(
+          m,
+          targetDb,
+          onProgress: (d, t) => _progress(d, t, 'מזהה את גרסת המסד'),
+          isCancelled: () => _cancel,
+          knownSha: await _cachedSha(targetDb),
+        );
+        if (info.state == LocalDbState.current) {
+          activity = null;
+          local = info;
+          _msg('המסד כבר בגרסה העדכנית (${m.version}).');
+          return;
+        }
+        if (info.delta != null) artifact = info.delta!;
+      }
+      activity!.title = artifact.isDelta ? 'מוריד עדכון' : 'מוריד את המסד המלא';
+      notifyListeners();
+      await _service.download(r, [artifact], mirrorDir, onProgress: _progress, isCancelled: () => _cancel);
+      activity!.title = artifact.isDelta ? 'מעדכן את המסד' : 'מתקין את המסד';
+      notifyListeners();
+      await _service.install(artifact, mirrorDir, targetDb, onProgress: _progress, isCancelled: () => _cancel);
+      await _rememberSha(targetDb, artifact.sha256);
+      // הקבצים כבר הוחלו: לא משאירים ~400MB מיותרים בדיסק.
+      for (final part in artifact.parts) {
+        try {
+          await File(DbService.partPath(mirrorDir, part)).delete();
+        } catch (_) {}
+      }
+      _msg('המסד עודכן לגרסה ${m.version}.');
+    } on DownloadCancelled {
+      _msg('הפעולה נעצרה. המסד הקיים לא שונה.');
+    } catch (e) {
+      final text = e.toString();
+      final cancelled = text.contains('הפעולה בוטלה');
+      _msg(cancelled ? 'הפעולה נעצרה. המסד הקיים לא שונה.' : 'העדכון נכשל: $text', error: !cancelled);
+    }
+    activity = null;
+    notifyListeners();
+    await refreshMirror();
+    await inspectTarget();
+  }
+
+  /// מוחק את זיהוי הגרסה של המחשב היעד (להורדת המסד המלא).
+  void clearTransferVersion() {
+    fromVersion = null;
+    notifyListeners();
   }
 
   // ─── התקנה ────────────────────────────────────────────────────────

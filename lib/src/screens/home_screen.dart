@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 
 import '../controllers/app_controller.dart';
 import '../db/db_controller.dart';
+import '../db/db_service.dart' show LocalDbState;
 import '../theme/app_tokens.dart';
 import '../widgets/app_card.dart';
 
@@ -221,8 +224,7 @@ class _DbCard extends StatelessWidget {
         children: [
           Text(
             m != null
-                ? 'גרסה ${m.version} זמינה. מסד מלא ${DbController.formatBytes(m.full.downloadSize)}, '
-                    'או קבצי עדכון בלבד (קטנים בהרבה).'
+                ? 'גרסה ${m.version} זמינה. התוכנה מזהה את הגרסה שבמחשב ומורידה רק מה שדרוש.'
                 : db.checking
                     ? 'בודק גרסה...'
                     : (db.remoteError ?? 'מסד מוכן של המאגר, להורדה ולעדכון (גם ללא רשת).'),
@@ -233,25 +235,25 @@ class _DbCard extends StatelessWidget {
             spacing: AppTokens.spaceSM,
             runSpacing: AppTokens.spaceSM,
             children: [
-              FilledButton.icon(
-                onPressed: m != null && !db.busy
-                    ? () {
-                        db.setMode(DbDownloadMode.full);
-                        db.download();
-                      }
-                    : null,
-                icon: const Icon(FluentIcons.arrow_download_24_regular),
-                label: const Text('הורד את המסד המלא'),
-              ),
+              if (db.targetDb.isEmpty)
+                FilledButton.icon(
+                  onPressed: () => onNavigate(1),
+                  icon: const Icon(FluentIcons.folder_open_24_regular),
+                  label: const Text('הגדרת מיקום המסד'),
+                )
+              else
+                FilledButton.icon(
+                  onPressed: m != null && !db.busy && !db.inspecting && db.local?.state != LocalDbState.current ? db.updateNow : null,
+                  icon: const Icon(FluentIcons.arrow_download_24_regular),
+                  label: Text(db.local?.state == LocalDbState.current
+                      ? 'המסד מעודכן'
+                      : (File(db.targetDb).existsSync() ? 'עדכן את המסד' : 'הורד והתקן את המסד')),
+                ),
               OutlinedButton.icon(
-                onPressed: () {
-                  db.setMode(DbDownloadMode.updatesOnly);
-                  onNavigate(1);
-                },
-                icon: const Icon(FluentIcons.arrow_sync_24_regular),
-                label: const Text('קבצי עדכון בלבד'),
+                onPressed: () => onNavigate(1),
+                icon: const Icon(FluentIcons.settings_24_regular),
+                label: const Text('כל אפשרויות המסד'),
               ),
-              TextButton(onPressed: () => onNavigate(1), child: const Text('כל אפשרויות המסד')),
             ],
           ),
           if (a != null) ...[

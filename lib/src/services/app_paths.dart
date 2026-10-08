@@ -46,6 +46,9 @@ class AppPaths {
     return p.dirname(exe);
   }
 
+  /// תיקיית הגדרות פר-מחשב (לא נוסעת עם דיסק און קי).
+  static String userConfigDir() => _userConfigDir();
+
   static String _userConfigDir() {
     if (Platform.isWindows) {
       final appData = Platform.environment['APPDATA'];

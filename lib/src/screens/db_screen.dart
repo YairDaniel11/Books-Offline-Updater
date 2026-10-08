@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
@@ -61,11 +63,13 @@ class DbScreen extends StatelessWidget {
                     ],
                     _LatestCard(db: db),
                     const SizedBox(height: AppTokens.spaceMD),
-                    _MirrorCard(db: db, onPick: _pickMirror),
+                    _MyDbCard(db: db, onPickExisting: _pickExistingDb, onPickNew: _pickNewDbFolder),
                     const SizedBox(height: AppTokens.spaceMD),
                     _DownloadCard(db: db, onDetect: _detectFromFile),
                     const SizedBox(height: AppTokens.spaceMD),
                     _InstallCard(db: db, onPickExisting: _pickExistingDb, onPickNew: _pickNewDbFolder),
+                    const SizedBox(height: AppTokens.spaceMD),
+                    _MirrorCard(db: db, onPick: _pickMirror),
                   ],
                 ),
               ),
@@ -182,6 +186,77 @@ class _MirrorCard extends StatelessWidget {
   }
 }
 
+/// המסד במחשב הזה: מיקום נבחר פעם אחת (ונזכר), ועדכון בלחיצה אחת שבוחר לבד מה להוריד.
+class _MyDbCard extends StatelessWidget {
+  const _MyDbCard({required this.db, required this.onPickExisting, required this.onPickNew});
+  final DbController db;
+  final VoidCallback onPickExisting;
+  final VoidCallback onPickNew;
+
+  @override
+  Widget build(BuildContext context) {
+    final r = db.remote?.manifest;
+    final info = db.local;
+    final String status;
+    if (db.targetDb.isEmpty) {
+      status = 'עדיין לא נבחר מיקום למסד.';
+    } else if (!File(db.targetDb).existsSync()) {
+      status = r == null ? 'המסד עדיין לא קיים בנתיב הזה.' : 'המסד עדיין לא קיים בנתיב הזה. יורד ויותקן המסד המלא (${DbController.formatBytes(r.full.downloadSize)}).';
+    } else if (db.inspecting) {
+      status = 'מזהה את גרסת המסד...';
+    } else if (info == null) {
+      status = '';
+    } else if (info.state == LocalDbState.current) {
+      status = 'המסד מעודכן (גרסה ${info.version}).';
+    } else if (info.state == LocalDbState.hasDelta) {
+      status = 'גרסה ${info.version}. יש עדכון לגרסה ${r?.version ?? ''}'
+          '${info.delta == null ? '' : ' (הורדה של ${DbController.formatBytes(info.delta!.downloadSize)})'}.';
+    } else {
+      status = 'גרסת המסד אינה מזוהה. יוחלף במסד העדכני (${r == null ? '' : DbController.formatBytes(r.full.downloadSize)}).';
+    }
+    final upToDate = info?.state == LocalDbState.current;
+    return AppCard(
+      title: 'המסד במחשב הזה',
+      icon: FluentIcons.database_24_regular,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _row(context, 'מיקום', db.targetDb.isEmpty ? 'לא נבחר' : db.targetDb),
+          if (status.isNotEmpty) _row(context, 'מצב', status),
+          const SizedBox(height: AppTokens.spaceSM),
+          Wrap(
+            spacing: AppTokens.spaceSM,
+            runSpacing: AppTokens.spaceSM,
+            children: [
+              FilledButton.icon(
+                onPressed: db.targetDb.isNotEmpty && r != null && !db.busy && !db.inspecting && !upToDate ? db.updateNow : null,
+                icon: const Icon(FluentIcons.arrow_download_24_regular),
+                label: Text(db.targetDb.isNotEmpty && !File(db.targetDb).existsSync() ? 'הורד והתקן' : 'עדכן את המסד'),
+              ),
+              OutlinedButton.icon(
+                onPressed: db.busy ? null : onPickExisting,
+                icon: const Icon(FluentIcons.folder_open_24_regular),
+                label: Text(db.targetDb.isEmpty ? 'בחר את קובץ המסד' : 'שנה מיקום'),
+              ),
+              OutlinedButton.icon(
+                onPressed: db.busy ? null : onPickNew,
+                icon: const Icon(FluentIcons.add_24_regular),
+                label: const Text('אין לי מסד: צור חדש בתיקייה...'),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppTokens.spaceSM),
+          Text(
+            'המיקום נזכר במחשב הזה. התוכנה מזהה את הגרסה ומורידה רק מה שדרוש. אוצריא חייבת להיות סגורה בזמן העדכון.',
+            style: _muted(context),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// הכנת קבצים להעברה למחשב אחר (ללא רשת): בלי להכריע בין "מלא" ל"עדכון".
 class _DownloadCard extends StatelessWidget {
   const _DownloadCard({required this.db, required this.onDetect});
   final DbController db;
@@ -192,80 +267,48 @@ class _DownloadCard extends StatelessWidget {
     final r = db.remote?.manifest;
     final can = r != null && !db.busy;
     final bytes = db.downloadBytes;
+    final sel = db.selectedDownload;
+    final delta = sel.isNotEmpty && sel.first.isDelta;
     return AppCard(
-      title: 'הורדה (מחשב מחובר)',
+      title: 'הכנה להעברה למחשב אחר (ללא רשת)',
       icon: FluentIcons.arrow_download_24_regular,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SegmentedButton<DbDownloadMode>(
-            segments: const [
-              ButtonSegment(
-                value: DbDownloadMode.updatesOnly,
-                icon: Icon(FluentIcons.arrow_sync_24_regular),
-                label: Text('קבצי עדכון בלבד'),
-              ),
-              ButtonSegment(
-                value: DbDownloadMode.full,
-                icon: Icon(FluentIcons.database_24_regular),
-                label: Text('המסד המלא'),
-              ),
-            ],
-            selected: {db.mode},
-            onSelectionChanged: db.busy ? null : (s) => db.setMode(s.first),
+          Text(
+            'מורידים לתיקיית המסד (מראה) קבצים שמעבירים (למשל בדיסק און קי) למחשב שאין בו רשת, ושם מתקינים אותם. '
+            'אם יש לכם עותק של המסד של אותו מחשב, בחרו אותו והתוכנה תוריד רק את מה שחסר לו. בלי עותק, יורד המסד המלא.',
+            style: _muted(context),
           ),
           const SizedBox(height: AppTokens.spaceSM),
-          if (db.mode == DbDownloadMode.updatesOnly) ...[
-            Text(
-              'קובץ עדכון קטן בהרבה מהמסד המלא, אך מתאים רק למסד שבגרסה מסוימת. בחרו את הגרסה שמותקנת במחשב החסום, '
-              'או זהו אותה מקובץ המסד.',
-              style: _muted(context),
-            ),
-            const SizedBox(height: AppTokens.spaceSM),
-            if (r != null && r.deltas.isEmpty)
-              Text('אין כרגע קובצי עדכון. יש להוריד את המסד המלא.', style: _muted(context))
-            else
-              Wrap(
-                spacing: AppTokens.spaceSM,
-                runSpacing: AppTokens.spaceSM,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  DropdownButton<int?>(
-                    value: db.fromVersion,
-                    onChanged: db.busy ? null : db.setFromVersion,
-                    items: [
-                      const DropdownMenuItem<int?>(value: null, child: Text('כל קובצי העדכון')),
-                      for (final d in r?.deltas ?? const <DbArtifact>[])
-                        DropdownMenuItem<int?>(
-                          value: d.fromVersion,
-                          child: Text('מגרסה ${d.fromVersion} (${DbController.formatBytes(d.downloadSize)})'),
-                        ),
-                    ],
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: can && !db.inspecting ? onDetect : null,
-                    icon: const Icon(FluentIcons.search_24_regular),
-                    label: Text(db.inspecting ? 'מזהה...' : 'זהה גרסה מקובץ מסד'),
-                  ),
-                ],
+          Wrap(
+            spacing: AppTokens.spaceSM,
+            runSpacing: AppTokens.spaceSM,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              OutlinedButton.icon(
+                onPressed: can && !db.inspecting ? onDetect : null,
+                icon: const Icon(FluentIcons.search_24_regular),
+                label: Text(db.inspecting ? 'מזהה...' : 'בחר עותק של המסד של המחשב השני'),
               ),
-          ] else
-            Text(
-              'המסד המלא מתאים לכל מחשב, גם לזה שאין בו מסד קודם או שהגרסה שלו אינה מוכרת.',
-              style: _muted(context),
-            ),
+              if (db.fromVersion != null)
+                TextButton(onPressed: db.busy ? null : db.clearTransferVersion, child: const Text('אין לו מסד')),
+            ],
+          ),
+          const SizedBox(height: AppTokens.spaceSM),
+          Text(
+            r == null
+                ? 'ההורדה זמינה רק עם חיבור לרשת.'
+                : delta
+                    ? 'יורד: עדכון מגרסה ${db.fromVersion} לגרסה ${r.version}.'
+                    : 'יורד: המסד המלא (גרסה ${r.version}).',
+          ),
           const SizedBox(height: AppTokens.spaceMD),
           FilledButton.icon(
-            onPressed: can && db.selectedDownload.isNotEmpty ? db.download : null,
+            onPressed: can && sel.isNotEmpty ? db.download : null,
             icon: const Icon(FluentIcons.arrow_download_24_regular),
-            label: Text(bytes == 0 && db.selectedDownload.isNotEmpty
-                ? 'הכול כבר הורד (בדוק שוב)'
-                : 'הורד (${DbController.formatBytes(bytes)})'),
+            label: Text(bytes == 0 && sel.isNotEmpty ? 'הכול כבר הורד (בדוק שוב)' : 'הורד (${DbController.formatBytes(bytes)})'),
           ),
-          if (r == null) ...[
-            const SizedBox(height: AppTokens.spaceSM),
-            Text('ההורדה זמינה רק עם חיבור לרשת.', style: _muted(context)),
-          ],
         ],
       ),
     );
@@ -283,7 +326,7 @@ class _InstallCard extends StatelessWidget {
     final plan = db.plan;
     final cs = Theme.of(context).colorScheme;
     return AppCard(
-      title: 'התקנה ועדכון (גם ללא רשת)',
+      title: 'התקנה מתיקיית המסד (במחשב ללא רשת)',
       icon: FluentIcons.database_24_regular,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

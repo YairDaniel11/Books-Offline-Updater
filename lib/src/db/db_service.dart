@@ -286,8 +286,9 @@ class DbService {
     String path, {
     void Function(int done, int total)? onProgress,
     bool Function()? isCancelled,
+    String? knownSha,
   }) async {
-    final sha = await sha256OfFile(path, onProgress: onProgress, isCancelled: isCancelled);
+    final sha = knownSha ?? await sha256OfFile(path, onProgress: onProgress, isCancelled: isCancelled);
     if (sha == m.full.sha256) return LocalDbInfo(sha, LocalDbState.current, version: m.version);
     final d = m.deltaForSha(sha);
     if (d != null) return LocalDbInfo(sha, LocalDbState.hasDelta, version: d.fromVersion, delta: d);
