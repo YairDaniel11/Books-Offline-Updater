@@ -10,10 +10,9 @@ import '../update/update_banner.dart';
 import '../widgets/activity_card.dart';
 import '../widgets/message_banner.dart';
 import 'db_screen.dart';
-import 'extract_screen.dart';
 import 'home_screen.dart';
-import 'library_screen.dart';
 import 'settings_screen.dart';
+import 'txt_books_screen.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key, required this.controller});
@@ -61,9 +60,8 @@ class _AppShellState extends State<AppShell> {
 
     final screens = <Widget>[
       HomeScreen(controller: c, db: _db, onNavigate: _goTo),
-      DbScreen(db: _db),
-      LibraryScreen(controller: c),
-      ExtractScreen(controller: c),
+      DbScreen(db: _db, app: c),
+      TxtBooksScreen(controller: c, onGoDb: () => _goTo(1)),
       SettingsScreen(controller: c, update: _update),
     ];
 
@@ -86,14 +84,9 @@ class _AppShellState extends State<AppShell> {
                 label: Text('מסד ספרים (DB)', textAlign: TextAlign.center),
               ),
               NavigationRailDestination(
-                icon: Icon(FluentIcons.library_24_regular),
-                selectedIcon: Icon(FluentIcons.library_24_filled),
-                label: Text('ספרים בפורמט TXT', textAlign: TextAlign.center),
-              ),
-              NavigationRailDestination(
-                icon: Icon(FluentIcons.arrow_download_24_regular),
-                selectedIcon: Icon(FluentIcons.arrow_download_24_filled),
-                label: Text('חילוץ'),
+                icon: Icon(FluentIcons.document_text_24_regular),
+                selectedIcon: Icon(FluentIcons.document_text_24_filled),
+                label: Text('ספרים בודדים (TXT)', textAlign: TextAlign.center),
               ),
               NavigationRailDestination(
                 icon: Icon(FluentIcons.settings_24_regular),

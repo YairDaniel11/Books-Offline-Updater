@@ -95,10 +95,10 @@ class DbManifest {
     try {
       j = jsonDecode(utf8.decode(bytes));
     } catch (_) {
-      throw DbManifestException('המניפסט אינו JSON תקין');
+      throw DbManifestException('נתוני הגרסה אינם תקינים');
     }
-    if (j is! Map<String, dynamic>) throw DbManifestException('המניפסט אינו תקין');
-    if (j['format'] != 1) throw DbManifestException('פורמט מניפסט לא נתמך');
+    if (j is! Map<String, dynamic>) throw DbManifestException('נתוני הגרסה אינם תקינים');
+    if (j['format'] != 1) throw DbManifestException('פורמט נתוני הגרסה לא נתמך. ייתכן שנדרשת גרסה חדשה של התוכנה');
     final lib = j['library_id'];
     final ver = j['db_version'];
     if (lib is! String || lib.isEmpty) throw DbManifestException('library_id חסר');
@@ -117,7 +117,7 @@ class DbManifest {
   }
 
   static DbArtifact _artifact(Object? a, {required bool delta}) {
-    if (a is! Map<String, dynamic>) throw DbManifestException('רכיב חסר במניפסט');
+    if (a is! Map<String, dynamic>) throw DbManifestException('חסר רכיב בנתוני הגרסה');
     final comp = a['compression'];
     final allowed = delta ? const ['zstd-patch'] : const ['zstd', 'none'];
     if (comp is! String || !allowed.contains(comp)) throw DbManifestException('סוג דחיסה לא נתמך: $comp');

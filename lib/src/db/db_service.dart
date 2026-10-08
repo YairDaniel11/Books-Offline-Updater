@@ -70,10 +70,10 @@ class DbService {
 
   DbRelease _verify(Uint8List bytes, String sig) {
     if (!verifyManifestSignature(bytes, sig)) {
-      throw DbException('חתימת המניפסט אינה תקינה. הקבצים אינם מהמאגר המקורי, ולכן לא ייעשה בהם שימוש.');
+      throw DbException('לא ניתן לוודא שהקבצים מהמאגר המקורי, ולכן לא ייעשה בהם שימוש.');
     }
     final m = DbManifest.parse(bytes);
-    if (m.libraryId != dbLibraryId) throw DbException('המניפסט שייך למסד אחר (${m.libraryId})');
+    if (m.libraryId != dbLibraryId) throw DbException('הקבצים שייכים למסד אחר (${m.libraryId})');
     return DbRelease(bytes, sig, m);
   }
 
@@ -102,7 +102,7 @@ class DbService {
     } on DbManifestException catch (e) {
       throw DbException(e.message);
     } catch (e) {
-      throw DbException('לא ניתן לטעון את מניפסט המסד ($e)');
+      throw DbException('לא ניתן לבדוק את גרסת המסד ($e)');
     }
   }
 
@@ -217,7 +217,7 @@ class DbService {
         await tmp.delete();
         onBytes(-counted);
         counted = 0;
-        throw DbException('בדיקת תקינות (SHA-256) נכשלה');
+        throw DbException('בדיקת תקינות הקובץ נכשלה');
       } on DownloadCancelled {
         rethrow;
       } catch (e) {
@@ -320,7 +320,7 @@ class DbService {
         onProgress: (d, _) => onProgress(base + d, total, 'בודק תקינות: ${part.fileName}'),
         isCancelled: isCancelled,
       );
-      if (sha != part.sha256) throw DbException('הקובץ ${part.fileName} פגום (SHA-256 לא תואם). יש להוריד או להעתיק אותו מחדש.');
+      if (sha != part.sha256) throw DbException('הקובץ ${part.fileName} פגום. יש להוריד או להעתיק אותו מחדש.');
       base += part.size;
     }
 
@@ -342,7 +342,7 @@ class DbService {
       }
       if (isCancelled()) throw DownloadCancelled();
       if (r.size != artifact.size || r.sha256 != artifact.sha256) {
-        throw DbException('התוצאה אינה תואמת למניפסט (SHA-256). המסד הקיים לא שונה.');
+        throw DbException('התוצאה לא עברה בדיקת תקינות. המסד הקיים לא שונה.');
       }
       onProgress(1, 1, 'מחליף את הקובץ');
       final t = File(tmpPath);

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 import '../pak/pak_file.dart';
+import '../services/zip_extract.dart';
 import '../services/app_paths.dart';
 import '../services/repo_service.dart';
 
@@ -201,6 +202,65 @@ class AppController extends ChangeNotifier {
       if (i.path.endsWith('תלמוד בבלי/שס וגשל')) return i.path;
     }
     return null;
+  }
+
+  BookItem? get shasItem {
+    final s = shasPath;
+    if (s == null) return null;
+    for (final i in items) {
+      if (i.path == s) return i;
+    }
+    return null;
+  }
+
+  /// הורדת ש"ס וגשל (אינם כלולים במסד) וחילוצם לתיקייה "תלמוד בבלי" תחת [destRoot], לפי סדרים.
+  /// בלי קשר לקובץ ה-PAK של ספרי ה-TXT. מחזיר `true` בהצלחה.
+  Future<bool> downloadShasTo(String destRoot) async {
+    final item = shasItem;
+    if (item == null || busy) return false;
+    activity = Activity('מוריד את ש"ס וגשל');
+    lastMessage = null;
+    notifyListeners();
+    final tmpDir = Directory(p.join(Directory.systemTemp.path, 'BooksOfflineUpdate'));
+    await tmpDir.create(recursive: true);
+    final zipPath = p.join(tmpDir.path, item.zip);
+    var ok = false;
+    try {
+      await _repo.downloadZip(
+        item,
+        zipPath,
+        onProgress: (got, total) => _progress(
+          'מוריד: ש"ס וגשל${total != null ? ' (${_mb(got)} מתוך ${_mb(total)})' : ''}',
+          total != null ? got / total : null,
+        ),
+        isCancelled: () => activity?.cancelled ?? true,
+      );
+      final dest = p.join(destRoot, 'תלמוד בבלי');
+      _progress('מחלץ לתיקייה "תלמוד בבלי"', null);
+      await extractZipTo(
+        zipPath,
+        dest,
+        onProgress: (d, t) => _progress('מחלץ לתיקייה "תלמוד בבלי"', t == 0 ? null : d / t),
+        isCancelled: () => activity?.cancelled ?? true,
+      );
+      if (activity?.cancelled ?? false) {
+        _msg('הפעולה נעצרה.');
+      } else {
+        ok = true;
+        _msg('ש"ס וגשל נשמרו בתיקייה: $dest');
+      }
+    } on DownloadCancelled {
+      _msg('הפעולה נעצרה.');
+    } catch (e) {
+      _msg('ההורדה נכשלה: $e', error: true);
+    } finally {
+      try {
+        await File(zipPath).delete();
+      } catch (_) {}
+      activity = null;
+      notifyListeners();
+    }
+    return ok;
   }
 
   bool isIgnored(BookItem i) {

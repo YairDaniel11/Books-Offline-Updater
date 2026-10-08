@@ -186,7 +186,7 @@ class UpdateController extends ChangeNotifier {
         hasher.close();
       }
       if (i.sha256 != null && digestOut.value.toString() != i.sha256) {
-        throw const HttpException('בדיקת תקינות (SHA-256) נכשלה');
+        throw const HttpException('בדיקת תקינות הקובץ נכשלה');
       }
       state = UpdateState.restarting;
       notifyListeners();

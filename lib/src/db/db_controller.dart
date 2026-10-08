@@ -62,6 +62,9 @@ class DbController extends ChangeNotifier {
 
   bool _cancel = false;
 
+  /// ה-hash של ש"ס וגשל שהורדו במחשב הזה (לזיהוי עדכון).
+  String? shasHash;
+
   /// SHA-256 של המסד שנבדק לאחרונה, לפי (גודל, זמן שינוי), כדי לא לקרוא מחדש ~1GB בכל הפעלה.
   Map<String, dynamic> _shaCache = {};
 
@@ -103,6 +106,8 @@ class DbController extends ChangeNotifier {
         if (m is String && m.isNotEmpty) mirrorDir = m;
         final t = j['targetDb'];
         if (t is String) targetDb = t;
+        final sh = j['shasHash'];
+        if (sh is String) shasHash = sh;
         final c = j['shaCache'];
         if (c is Map<String, dynamic>) _shaCache = c;
       } catch (_) {}
@@ -120,6 +125,7 @@ class DbController extends ChangeNotifier {
         'mirrorDir': mirrorDir,
         'targetDb': targetDb,
         'shaCache': _shaCache,
+        'shasHash': shasHash,
       }));
     } catch (_) {}
   }
@@ -308,6 +314,25 @@ class DbController extends ChangeNotifier {
     if (targetDb.isNotEmpty) await inspectTarget();
   }
 
+  /// ש"ס וגשל מורדים לצד קובץ המסד, בתיקייה "תלמוד בבלי".
+  String? get shasDestDir => targetDb.isEmpty ? null : p.dirname(targetDb);
+
+  bool get shasDownloaded {
+    final d = shasDestDir;
+    return d != null && shasHash != null && Directory(p.join(d, 'תלמוד בבלי')).existsSync();
+  }
+
+  Future<void> downloadShas() async {
+    final d = shasDestDir;
+    final item = _app.shasItem;
+    if (d == null || item == null || busy) return;
+    if (await _app.downloadShasTo(d)) {
+      shasHash = item.hash;
+      await _save();
+    }
+    notifyListeners();
+  }
+
   // ─── עדכון בלחיצה אחת (מחשב מחובר) ───────────────────────────────
 
   /// מזהה את גרסת המסד שבמחשב הזה, מוריד רק מה שדרוש (קובץ עדכון, או המסד המלא כשאין ברירה),
@@ -382,7 +407,7 @@ class DbController extends ChangeNotifier {
     if (!exists) {
       return fullOk
           ? InstallPlan(InstallAction.full, 'הקובץ אינו קיים: יותקן המסד המלא (גרסה ${m.version}).', artifact: m.full)
-          : InstallPlan(InstallAction.blocked, 'אין במראה את המסד המלא, ולכן אי אפשר ליצור מסד חדש.');
+          : InstallPlan(InstallAction.blocked, 'בתיקייה אין את קובץ המסד המלא, ולכן אי אפשר ליצור מסד חדש.');
     }
     final info = local;
     if (info == null) return null; // עדיין מזהים
@@ -401,13 +426,13 @@ class DbController extends ChangeNotifier {
         if (fullOk) {
           return InstallPlan(
             InstallAction.full,
-            'קובץ העדכון מגרסה ${info.version} חסר במראה. יוחלף המסד כולו (${formatBytes(m.full.downloadSize)}).',
+            'קובץ העדכון מגרסה ${info.version} חסר בתיקייה. יוחלף המסד כולו (${formatBytes(m.full.downloadSize)}).',
             artifact: m.full,
           );
         }
         return InstallPlan(
           InstallAction.blocked,
-          'המסד בגרסה ${info.version}, אך קובץ העדכון שלו חסר במראה. יש להוריד אותו במחשב מחובר.',
+          'המסד בגרסה ${info.version}, אך קובץ העדכון שלו חסר בתיקייה. יש להוריד אותו במחשב מחובר.',
         );
       case LocalDbState.unknown:
         return fullOk
@@ -418,7 +443,7 @@ class DbController extends ChangeNotifier {
               )
             : InstallPlan(
                 InstallAction.blocked,
-                'גרסת המסד אינה מזוהה, ובמראה אין את המסד המלא. יש להוריד אותו במחשב מחובר.',
+                'גרסת המסד אינה מזוהה, ובתיקייה אין את קובץ המסד המלא. יש להוריד אותו במחשב מחובר.',
               );
     }
   }

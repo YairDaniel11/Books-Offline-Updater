@@ -154,6 +154,11 @@ class _ExtractScreenState extends State<ExtractScreen> {
                               style: TextStyle(fontSize: AppTokens.fontXL, fontWeight: FontWeight.w600)),
                           const SizedBox(height: AppTokens.spaceXS),
                           Text(
+                            'מסך זה מיועד לגרסת הספרים בפורמט TXT (קובץ המאגר). מי שמשתמש במסד הספרים (DB) אינו צריך אותו.',
+                            style: TextStyle(color: theme.colorScheme.primary, fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: AppTokens.spaceXS),
+                          Text(
                             'במאגר ${c.pakFileCount} קבצים'
                             '${total != null ? ' (${AppController.formatBytes(total)} לא דחוס)' : ''}',
                             style: TextStyle(color: theme.colorScheme.onSurfaceVariant),

@@ -71,12 +71,23 @@ class SettingsScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: AppTokens.spaceMD),
+                    Card(
+                      child: Theme(
+                        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                        child: ExpansionTile(
+                          leading: const Icon(FluentIcons.document_text_24_regular),
+                          title: const Text('הגדרות לספרים בפורמט TXT (למתקדמים)'),
+                          subtitle: const Text('רלוונטי רק למי שמוריד ספרים בפורמט TXT, ולא למסד הספרים'),
+                          childrenPadding: const EdgeInsets.all(AppTokens.spaceSM),
+                          children: [
                     AppCard(
-                      title: 'הורדות',
+                      title: 'הורדות (ספרים בפורמט TXT)',
                       icon: FluentIcons.arrow_download_24_regular,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          Text('ההגדרות כאן רלוונטיות רק למי שמוריד את הספרים בפורמט TXT, ולא למסד הספרים.', style: hint),
+                          const SizedBox(height: AppTokens.spaceSM),
                           SwitchListTile(
                             contentPadding: EdgeInsets.zero,
                             title: const Text('התעלם משס וגשל'),
@@ -138,6 +149,10 @@ class SettingsScreen extends StatelessWidget {
                             label: const Text('צמצם את קובץ המאגר'),
                           ),
                         ],
+                      ),
+                    ),
+                          ],
+                        ),
                       ),
                     ),
                     const SizedBox(height: AppTokens.spaceMD),

@@ -239,7 +239,7 @@ class RepoService {
         final md5sum = (await md5.bind(file.openRead()).first).toString();
         if (md5sum == item.hash) return;
         await file.delete();
-        throw RepoException('בדיקת תקינות (MD5) נכשלה');
+        throw RepoException('בדיקת תקינות הקובץ נכשלה');
       } on DownloadCancelled {
         rethrow;
       } catch (e) {
