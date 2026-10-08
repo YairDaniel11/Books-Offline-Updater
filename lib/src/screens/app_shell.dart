@@ -28,11 +28,12 @@ class _AppShellState extends State<AppShell> {
   int _index = 0;
   late final DbController _db = DbController(widget.controller);
   bool _dbStarted = false;
-  final UpdateController _update = UpdateController();
+  late final UpdateController _update = UpdateController(beforeRestart: () async => widget.controller.pak?.close());
 
   @override
   void initState() {
     super.initState();
+    UpdateController.cleanupLeftovers();
     _update.check();
   }
 

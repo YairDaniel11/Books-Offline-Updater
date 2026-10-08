@@ -46,6 +46,11 @@ enum UpdateState { idle, checking, available, downloading, restarting, error }
 
 /// בדיקת גרסה חדשה ב-GitHub Releases, הורדה, והחלפה עצמית: התוכנה נסגרת, הקובץ מוחלף והגרסה החדשה נפתחת.
 class UpdateController extends ChangeNotifier {
+  UpdateController({this.beforeRestart});
+
+  /// נקרא אחרי ההחלפה ולפני שהגרסה החדשה נפתחת (סגירת קבצים פתוחים, כמו ה-PAK).
+  final Future<void> Function()? beforeRestart;
+
   UpdateState state = UpdateState.idle;
   UpdateInfo? info;
   String? error;
@@ -212,29 +217,35 @@ class UpdateController extends ChangeNotifier {
     } catch (_) {}
   }
 
-  static String _psq(String s) => "'${s.replaceAll("'", "''")}'";
-
+  /// Windows: אי אפשר למחוק או לדרוס קובץ שרץ, אבל אפשר לשנות את שמו. לכן מחליפים בתוך התהליך עצמו
+  /// (הישן ← `.old`, החדש ← השם המקורי), מפעילים את החדש וסוגרים. ה-`.old` נמחק בהפעלה הבאה.
+  /// (סקריפט PowerShell מנותק לא עבד: התהליך המנותק לא הספיק לבצע את ההחלפה.)
   Future<void> _restartWindows(File downloaded, String target) async {
-    // סקריפט מנותק: ממתין שהקובץ הישן ישתחרר (התוכנה נסגרת), מחליף אותו בחדש ומפעיל.
-    final script = '''
-\$old = ${_psq(target)}
-\$new = ${_psq(downloaded.path)}
-\$done = \$false
-for (\$i = 0; \$i -lt 120; \$i++) {
-  try { Move-Item -LiteralPath \$new -Destination \$old -Force -ErrorAction Stop; \$done = \$true; break }
-  catch { Start-Sleep -Milliseconds 500 }
-}
-if (\$done) { Start-Process -FilePath \$old }
-''';
-    final bytes = <int>[];
-    for (final u in script.codeUnits) {
-      bytes..add(u & 0xff)..add(u >> 8);
+    final old = File('$target.old');
+    try {
+      if (await old.exists()) await old.delete();
+    } catch (_) {}
+    await File(target).rename(old.path);
+    try {
+      await downloaded.rename(target);
+    } catch (e) {
+      await old.rename(target); // החזרה למצב הקודם
+      rethrow;
     }
-    await Process.start(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', base64.encode(bytes)],
-      mode: ProcessStartMode.detached,
-    );
+    await beforeRestart?.call();
+    await Process.start(target, const [], mode: ProcessStartMode.detached);
+  }
+
+  /// מוחק שאריות של עדכון קודם (בהפעלה).
+  static Future<void> cleanupLeftovers() async {
+    final t = AppPaths.selfUpdateTarget();
+    if (t == null || !Platform.isWindows) return;
+    for (final n in ['$t.old', '$t.new']) {
+      try {
+        final f = File(n);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
   }
 
   Future<void> _restartMac(File zip, String target) async {
