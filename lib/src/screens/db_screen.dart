@@ -111,17 +111,31 @@ class _LatestCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (r != null) ...[
-            _row(context, 'גרסה', '${r.version}  (חתימה אומתה)'),
-            _row(context, 'מסד מלא', DbController.formatBytes(r.full.downloadSize)),
-            if (r.deltas.isNotEmpty)
-              _row(
-                context,
-                'קבצי עדכון',
-                r.deltas
-                    .map((d) => 'מגרסה ${d.fromVersion}: ${DbController.formatBytes(d.downloadSize)}')
-                    .join('\n'),
+            _row(context, 'גרסה', '${r.version}'),
+            // פרטים לא נחוצים למשתמש רגיל: מוסתרים עד שפותחים.
+            Theme(
+              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('פרטים טכניים'),
+                expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _row(context, 'חתימה', 'אומתה'),
+                  _row(context, 'מסד מלא', DbController.formatBytes(r.full.downloadSize)),
+                  if (r.deltas.isNotEmpty)
+                    _row(
+                      context,
+                      'קבצי עדכון',
+                      r.deltas
+                          .map((d) => 'מגרסה ${d.fromVersion}: ${DbController.formatBytes(d.downloadSize)}')
+                          .join('\n'),
+                    ),
+                  if (r.notes.isNotEmpty) _row(context, 'הערות', r.notes),
+                ],
               ),
-            if (r.notes.isNotEmpty) _row(context, 'הערות', r.notes),
+            ),
           ] else if (db.checking)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: AppTokens.spaceSM),
