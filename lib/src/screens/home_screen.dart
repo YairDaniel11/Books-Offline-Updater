@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 
 import '../controllers/app_controller.dart';
+import '../db/db_controller.dart';
 import '../theme/app_tokens.dart';
 import '../widgets/app_card.dart';
 
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key, required this.controller, required this.onNavigate});
+  const HomeScreen({super.key, required this.controller, required this.db, required this.onNavigate});
 
   final AppController controller;
+  final DbController db;
 
   /// מעבר ללשונית לפי אינדקס (2 = חילוץ).
   final ValueChanged<int> onNavigate;
@@ -23,7 +25,7 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: controller,
+      listenable: Listenable.merge([controller, db]),
       builder: (context, _) {
         final c = controller;
         final pak = c.pak;
@@ -74,6 +76,8 @@ class HomeScreen extends StatelessWidget {
                         ],
                       ),
                     ),
+                    const SizedBox(height: AppTokens.spaceMD),
+                    _DbCard(db: db, onNavigate: onNavigate),
                     const SizedBox(height: AppTokens.spaceMD),
                     AppCard(
                       title: 'עדכון מהרשת',
@@ -192,6 +196,79 @@ class _OfflineBanner extends StatelessWidget {
           child: Text(controller.checkingOnline ? 'בודק...' : 'נסה שוב'),
         ),
       ]),
+    );
+  }
+}
+
+/// הורדת מסד אוצריא מדף הבית: מסד מלא בלחיצה, או מעבר ללשונית לבחירת קבצי עדכון.
+class _DbCard extends StatelessWidget {
+  const _DbCard({required this.db, required this.onNavigate});
+
+  final DbController db;
+  final ValueChanged<int> onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hint = theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    final m = db.remote?.manifest;
+    final a = db.activity;
+    return AppCard(
+      title: 'מסד אוצריא',
+      icon: FluentIcons.database_24_regular,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            m != null
+                ? 'גרסה ${m.version} זמינה. מסד מלא ${DbController.formatBytes(m.full.downloadSize)}, '
+                    'או קבצי עדכון בלבד (קטנים בהרבה).'
+                : db.checking
+                    ? 'בודק גרסה...'
+                    : (db.remoteError ?? 'מסד מוכן של המאגר, להורדה ולעדכון (גם ללא רשת).'),
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: AppTokens.spaceMD),
+          Wrap(
+            spacing: AppTokens.spaceSM,
+            runSpacing: AppTokens.spaceSM,
+            children: [
+              FilledButton.icon(
+                onPressed: m != null && !db.busy
+                    ? () {
+                        db.setMode(DbDownloadMode.full);
+                        db.download();
+                      }
+                    : null,
+                icon: const Icon(FluentIcons.arrow_download_24_regular),
+                label: const Text('הורד את המסד המלא'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () {
+                  db.setMode(DbDownloadMode.updatesOnly);
+                  onNavigate(3);
+                },
+                icon: const Icon(FluentIcons.arrow_sync_24_regular),
+                label: const Text('קבצי עדכון בלבד'),
+              ),
+              TextButton(onPressed: () => onNavigate(3), child: const Text('כל אפשרויות המסד')),
+            ],
+          ),
+          if (a != null) ...[
+            const SizedBox(height: AppTokens.spaceMD),
+            Row(children: [
+              Expanded(child: Text(a.title)),
+              TextButton(onPressed: a.cancelled ? null : db.cancel, child: Text(a.cancelled ? 'עוצר...' : 'עצור')),
+            ]),
+            if (a.detail.isNotEmpty) Text(a.detail, maxLines: 1, overflow: TextOverflow.ellipsis, style: hint),
+            const SizedBox(height: AppTokens.spaceSM),
+            ClipRRect(borderRadius: AppTokens.borderRadiusAll, child: LinearProgressIndicator(value: a.progress)),
+          ] else if (db.message != null) ...[
+            const SizedBox(height: AppTokens.spaceSM),
+            Text(db.message!, style: db.messageIsError ? hint?.copyWith(color: theme.colorScheme.error) : hint),
+          ],
+        ],
+      ),
     );
   }
 }

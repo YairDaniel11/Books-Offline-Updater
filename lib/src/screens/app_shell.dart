@@ -59,9 +59,14 @@ class _AppShellState extends State<AppShell> {
     if (c.pak == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+    // תיקיית הנתונים ידועה רק אחרי שהמאגר נפתח; מאתחלים את המסד פעם אחת כדי שדף הבית יציג את הגרסה.
+    if (!_dbStarted) {
+      _dbStarted = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _db.init());
+    }
 
     final screens = <Widget>[
-      HomeScreen(controller: c, onNavigate: _goTo),
+      HomeScreen(controller: c, db: _db, onNavigate: _goTo),
       LibraryScreen(controller: c),
       ExtractScreen(controller: c),
       DbScreen(db: _db),
