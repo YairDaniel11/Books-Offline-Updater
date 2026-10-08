@@ -16,7 +16,30 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # מספר הגרסה נקבע לפני הבנייה, כדי שהתוכנה תדע מה הגרסה שלה (לבדיקת עדכונים) וה-Release יישא אותו תג.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      number: ${{ steps.ver.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+            IFS=. read -r a b c <<< "${last#v}"
+            tag="v$a.$b.$((c+1))"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "number=${tag#v}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -46,7 +69,7 @@ jobs:
       - run: flutter test
 
       - name: בנייה
-        run: flutter build ${{ matrix.platform }} --release
+        run: flutter build ${{ matrix.platform }} --release --build-name=${{ needs.version.outputs.number }} --dart-define=APP_VERSION=${{ needs.version.outputs.number }}
 
       # אריזה (Windows): exe יחיד שרץ בלי התקנה (7-Zip SFX). הוא מחלץ את עצמו לתיקייה זמנית
       # ומריץ משם; התוכנה מזהה את ה-exe המקורי ושומרת את ה-PAK לידו.
@@ -87,31 +110,18 @@ jobs:
   release:
     # Release בכל ריצה מוצלחת: בדחיפת תג v* לפי התג, ובכל שינוי קוד ב-main נוצרת גרסה חדשה (העלאת patch).
     # paths-ignore למעלה מבטל ריצה בשינויי תיעוד בלבד.
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: קביעת מספר הגרסה
-        id: ver
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          else
-            last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
-            IFS=. read -r a b c <<< "${last#v}"
-            echo "tag=v$a.$b.$((c+1))" >> "$GITHUB_OUTPUT"
-          fi
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.tag }}
+          tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
           files: |
             dist/BooksOfflineUpdate.exe

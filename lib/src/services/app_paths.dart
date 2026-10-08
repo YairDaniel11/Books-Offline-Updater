@@ -11,22 +11,37 @@ const pakFileName = 'OtzariaBooks.pak';
 class AppPaths {
   AppPaths._();
 
+  /// Windows, exe יחיד (SFX): התוכנה מחולצת לתיקייה זמנית של 7-Zip, והאב שלה הוא ה-exe המקורי.
+  static String? _sfxParent() {
+    if (!Platform.isWindows) return null;
+    final dir = p.dirname(Platform.resolvedExecutable);
+    final temp = (Platform.environment['TEMP'] ?? Platform.environment['TMP'] ?? '').toLowerCase();
+    if (temp.isNotEmpty && p.basename(dir).startsWith('7z') && p.dirname(dir).toLowerCase() == p.normalize(temp)) {
+      return windowsParentExecutable();
+    }
+    return null;
+  }
+
+  static final _macMarker = '.app${Platform.pathSeparator}Contents${Platform.pathSeparator}MacOS';
+
+  /// הקובץ שמעדכנים בעדכון עצמי: ה-exe המקורי (Windows) או חבילת ה-.app (Mac); `null` בהרצה מהפיתוח.
+  static String? selfUpdateTarget() {
+    final parent = _sfxParent();
+    if (parent != null) return parent;
+    if (Platform.isMacOS) {
+      final exe = Platform.resolvedExecutable;
+      final i = exe.indexOf(_macMarker);
+      if (i >= 0) return exe.substring(0, i + 4);
+    }
+    return null;
+  }
+
   /// התיקייה שבה התוכנה רצה. ב-Mac זו התיקייה שמכילה את ה-.app.
   static String programDir() {
+    final parent = _sfxParent();
+    if (parent != null) return p.dirname(parent);
     final exe = Platform.resolvedExecutable;
-    if (Platform.isWindows) {
-      // exe יחיד (SFX): התוכנה מחולצת לתיקייה זמנית של 7-Zip, והאב שלה הוא ה-exe המקורי.
-      final dir = p.dirname(exe);
-      final temp = (Platform.environment['TEMP'] ?? Platform.environment['TMP'] ?? '').toLowerCase();
-      if (temp.isNotEmpty &&
-          p.basename(dir).startsWith('7z') &&
-          p.dirname(dir).toLowerCase() == p.normalize(temp)) {
-        final parent = windowsParentExecutable();
-        if (parent != null) return p.dirname(parent);
-      }
-    }
-    final marker = '.app${Platform.pathSeparator}Contents${Platform.pathSeparator}MacOS';
-    final i = exe.indexOf(marker);
+    final i = exe.indexOf(_macMarker);
     if (i >= 0) return p.dirname(exe.substring(0, i + 4));
     return p.dirname(exe);
   }

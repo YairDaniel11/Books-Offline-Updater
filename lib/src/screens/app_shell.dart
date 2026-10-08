@@ -5,6 +5,8 @@ import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import '../controllers/app_controller.dart';
 import '../db/db_controller.dart';
 import '../theme/app_tokens.dart';
+import '../update/app_update.dart';
+import '../update/update_banner.dart';
 import '../widgets/activity_card.dart';
 import '../widgets/message_banner.dart';
 import 'db_screen.dart';
@@ -26,9 +28,17 @@ class _AppShellState extends State<AppShell> {
   int _index = 0;
   late final DbController _db = DbController(widget.controller);
   bool _dbStarted = false;
+  final UpdateController _update = UpdateController();
+
+  @override
+  void initState() {
+    super.initState();
+    _update.check();
+  }
 
   @override
   void dispose() {
+    _update.dispose();
     _db.dispose();
     super.dispose();
   }
@@ -55,7 +65,7 @@ class _AppShellState extends State<AppShell> {
       LibraryScreen(controller: c),
       ExtractScreen(controller: c),
       DbScreen(db: _db),
-      SettingsScreen(controller: c),
+      SettingsScreen(controller: c, update: _update),
     ];
 
     return Scaffold(
@@ -97,6 +107,7 @@ class _AppShellState extends State<AppShell> {
           Expanded(
             child: Column(
               children: [
+                UpdateBanner(update: _update),
                 if (c.lastMessage != null || c.activity != null)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(AppTokens.spaceMD, AppTokens.spaceXL, AppTokens.spaceMD, 0),

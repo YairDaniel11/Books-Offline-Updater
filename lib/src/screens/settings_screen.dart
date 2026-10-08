@@ -4,12 +4,14 @@ import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 
 import '../controllers/app_controller.dart';
 import '../theme/app_tokens.dart';
+import '../update/app_update.dart';
 import '../widgets/app_card.dart';
 
 class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key, required this.controller});
+  const SettingsScreen({super.key, required this.controller, required this.update});
 
   final AppController controller;
+  final UpdateController update;
 
   Future<void> _pickDir() async {
     final dir = await FilePicker.getDirectoryPath(dialogTitle: 'בחירת מיקום המאגר');
@@ -34,7 +36,7 @@ class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: controller,
+      listenable: Listenable.merge([controller, update]),
       builder: (context, _) {
         final c = controller;
         final theme = Theme.of(context);
@@ -147,7 +149,25 @@ class SettingsScreen extends StatelessWidget {
                         children: [
                           const Text('עדכון אופליין למאגר ספרים'),
                           const SizedBox(height: 4),
-                          Text('גרסה 1.0.0', style: hint),
+                          Text(appVersion.isEmpty ? 'גרסת פיתוח' : 'גרסה $appVersion', style: hint),
+                          const SizedBox(height: AppTokens.spaceSM),
+                          Wrap(
+                            spacing: AppTokens.spaceSM,
+                            runSpacing: AppTokens.spaceSM,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: update.state == UpdateState.checking || update.state == UpdateState.downloading
+                                    ? null
+                                    : () => update.check(manual: true),
+                                icon: const Icon(FluentIcons.arrow_sync_24_regular),
+                                label: Text(update.state == UpdateState.checking ? 'בודק...' : 'בדוק גרסה חדשה של התוכנה'),
+                              ),
+                              if (update.state == UpdateState.idle && appVersion.isNotEmpty) Text('התוכנה מעודכנת', style: hint),
+                              if (update.state == UpdateState.error && update.error != null && update.info == null)
+                                Text(update.error!, style: hint?.copyWith(color: theme.colorScheme.error)),
+                            ],
+                          ),
                           const SizedBox(height: 4),
                           Text('מוריד את מאגר הספרים מ-GitHub לקובץ יחיד, ומחלץ אותו למחשבים ללא רשת.', style: hint),
                         ],
