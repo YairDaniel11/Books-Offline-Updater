@@ -48,7 +48,7 @@ Future<ZstdResult> zstdDecompressFiles(
   final flagAddress = flag.address;
   final send = port.sendPort;
   try {
-    final r = await Isolate.run(() => _decompress(sources, dest, prefixPath, flagAddress, send));
+    final r = await _runInIsolate(sources, dest, prefixPath, flagAddress, send);
     return ZstdResult(r.$1, r.$2);
   } finally {
     poll.cancel();
@@ -57,6 +57,19 @@ Future<ZstdResult> zstdDecompressFiles(
     port.close();
     malloc.free(flag);
   }
+}
+
+/// ה-closure נוצר כאן ולא ב-[zstdDecompressFiles] בכוונה: closure שומר את כל ההקשר שבו נוצר, ושם
+/// נמצאים `onProgress`/`isCancelled` של הקורא (שמחזיקים מצב עם קבצים פתוחים, שאי אפשר לשלוח ל-isolate).
+Future<(int, String)> _runInIsolate(
+  List<String> sources,
+  String dest,
+  String? prefixPath,
+  int flagAddress,
+  SendPort send,
+) {
+  final srcCopy = List<String>.of(sources);
+  return Isolate.run(() => _decompress(srcCopy, dest, prefixPath, flagAddress, send));
 }
 
 DynamicLibrary _openLibrary() {
