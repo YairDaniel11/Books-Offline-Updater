@@ -122,14 +122,33 @@ class _DbCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            m != null
-                ? 'גרסה ${m.version} זמינה.'
-                : db.checking
-                    ? 'בודק גרסה...'
-                    : (db.remoteError ?? 'להורדה ולעדכון של המסד.'),
-            style: theme.textTheme.bodyMedium,
-          ),
+          if (db.updateAvailable)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: AppTokens.spaceMD, vertical: AppTokens.spaceSM),
+              decoration: BoxDecoration(color: theme.colorScheme.primary, borderRadius: AppTokens.borderRadiusAll),
+              child: Row(children: [
+                Icon(FluentIcons.alert_badge_24_filled, color: theme.colorScheme.onPrimary),
+                const SizedBox(width: AppTokens.spaceSM),
+                Expanded(
+                  child: Text(
+                    'יש עדכון: גרסה ${m?.version}${db.local?.version != null ? ' (אצלך גרסה ${db.local!.version})' : ''}',
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(color: theme.colorScheme.onPrimary, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ]),
+            )
+          else
+            Text(
+              db.local?.state == LocalDbState.current && m != null
+                  ? 'המסד מעודכן (גרסה ${m.version}).'
+                  : m != null
+                      ? 'גרסה ${m.version} זמינה.'
+                      : db.checking
+                          ? 'בודק גרסה...'
+                          : (db.remoteError ?? 'להורדה ולעדכון של המסד.'),
+              style: theme.textTheme.bodyMedium,
+            ),
           const SizedBox(height: AppTokens.spaceMD),
           Wrap(
             spacing: AppTokens.spaceSM,

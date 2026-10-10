@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
@@ -11,6 +12,9 @@ import '../services/app_paths.dart';
 import '../services/repo_service.dart';
 
 enum ItemStatus { none, ok, update }
+
+/// המסך שנפתח בהפעלת התוכנה.
+enum StartScreen { home, db, copy }
 
 /// התקדמות של פעולה ארוכה (הורדה / חילוץ), להצגה בכרטיס ההתקדמות.
 class Activity {
@@ -43,6 +47,10 @@ class AppController extends ChangeNotifier {
 
   bool ignoreShas = false;
   ThemeMode themeMode = ThemeMode.system;
+  StartScreen startScreen = StartScreen.home;
+
+  /// SHA-256 של סיסמת הנעילה; כשקיימת, התוכנה נפתחת נעולה במסך העתקת הספרים.
+  String? lockHash;
 
   Activity? activity;
   String? lastMessage;
@@ -119,6 +127,9 @@ class AppController extends ChangeNotifier {
         'dark' => ThemeMode.dark,
         _ => ThemeMode.system,
       };
+      startScreen = StartScreen.values.where((e) => e.name == j['startScreen']).firstOrNull ?? StartScreen.home;
+      final lh = j['lockHash'];
+      lockHash = lh is String && lh.isNotEmpty ? lh : null;
     } catch (_) {}
   }
 
@@ -127,6 +138,8 @@ class AppController extends ChangeNotifier {
       await _settingsFile.writeAsString(jsonEncode({
         'ignoreShas': ignoreShas,
         'theme': themeMode.name,
+        'startScreen': startScreen.name,
+        if (lockHash != null) 'lockHash': lockHash,
       }));
     } catch (_) {
       // כונן לקריאה בלבד: ההגדרות נשארות לריצה הנוכחית.
@@ -144,6 +157,24 @@ class AppController extends ChangeNotifier {
     _saveSettings();
     notifyListeners();
   }
+
+  void setStartScreen(StartScreen s) {
+    startScreen = s;
+    _saveSettings();
+    notifyListeners();
+  }
+
+  static String _hashPassword(String password) =>
+      sha256.convert(utf8.encode('books-offline-lock:$password')).toString();
+
+  /// [password] = null מסיר את הנעילה.
+  void setLockPassword(String? password) {
+    lockHash = password == null || password.isEmpty ? null : _hashPassword(password);
+    _saveSettings();
+    notifyListeners();
+  }
+
+  bool checkPassword(String password) => lockHash != null && _hashPassword(password) == lockHash;
 
   Future<void> changeDataDir(String? dir) async {
     if (busy) return;

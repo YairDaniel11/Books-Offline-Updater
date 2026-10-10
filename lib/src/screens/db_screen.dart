@@ -254,21 +254,15 @@ class _OfflineCard extends StatelessWidget {
     final bytes = db.downloadBytes;
     final sel = db.selectedDownload;
     final delta = sel.isNotEmpty && sel.first.isDelta;
-    final plan = db.plan;
-    final cs = Theme.of(context).colorScheme;
-    final sub = Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600);
-
     return AppCard(
-      title: 'מחשב בלי אינטרנט',
+      title: 'הכנת ספרים למחשב בלי אינטרנט',
       icon: FluentIcons.cloud_off_24_regular,
-      info: 'שני שלבים: במחשב מחובר מכינים קבצים בתיקייה, מעבירים אותה (למשל בדיסק און קי) למחשב שאין בו רשת, '
-          'ושם מתקינים ממנה. אם יש עותק של המסד של המחשב השני, בחרו אותו והתוכנה תוריד רק את מה שחסר לו; '
-          'בלי עותק יורד המסד המלא.',
+      info: 'מכינים כאן קבצים, מעבירים את התוכנה יחד עם התיקייה "$dbMirrorDirName" (למשל בדיסק און קי) '
+          'למחשב שאין בו רשת, ושם פותחים את לשונית "העתקת הספרים". אם יש עותק של המסד של המחשב השני, '
+          'בחרו אותו והתוכנה תוריד רק את מה שחסר לו; בלי עותק יורד המסד המלא.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('1. במחשב מחובר: הכנת קבצים', style: sub),
-          const SizedBox(height: AppTokens.spaceSM),
           Wrap(
             spacing: AppTokens.spaceSM,
             runSpacing: AppTokens.spaceSM,
@@ -293,26 +287,13 @@ class _OfflineCard extends StatelessWidget {
           FilledButton.icon(
             onPressed: can && sel.isNotEmpty ? db.download : null,
             icon: const Icon(FluentIcons.arrow_download_24_regular),
-            label: Text(bytes == 0 && sel.isNotEmpty ? 'הכול כבר הורד' : 'הכן קבצים (${DbController.formatBytes(bytes)})'),
+            label: Text(bytes == 0 && sel.isNotEmpty ? 'הקבצים מוכנים' : 'הכן קבצים (${DbController.formatBytes(bytes)})'),
           ),
-          const Padding(padding: EdgeInsets.symmetric(vertical: AppTokens.spaceMD), child: Divider(height: 1)),
-          Text('2. במחשב בלי אינטרנט: התקנה', style: sub),
-          const SizedBox(height: AppTokens.spaceSM),
-          if (db.inspecting)
-            const LinearProgressIndicator()
-          else if (plan != null)
-            Text(plan.message, style: TextStyle(color: plan.action == InstallAction.blocked ? cs.error : null))
-          else if (db.mirror == null)
-            Text('בתיקייה עדיין אין קבצים. העבירו אליה את הקבצים שהוכנו, או בחרו תיקייה אחרת בפרטים הטכניים.',
-                style: _muted(context))
-          else if (db.targetDb.isEmpty)
-            Text('בחרו למעלה את מיקום המסד.', style: _muted(context)),
-          const SizedBox(height: AppTokens.spaceSM),
-          FilledButton.icon(
-            onPressed: plan != null && plan.canRun && !db.busy && !db.inspecting ? db.install : null,
-            icon: const Icon(FluentIcons.checkmark_24_regular),
-            label: Text(plan?.action == InstallAction.delta ? 'עדכן את המסד מהקבצים' : 'התקן את המסד מהקבצים'),
-          ),
+          if (bytes == 0 && sel.isNotEmpty) ...[
+            const SizedBox(height: AppTokens.spaceSM),
+            Text('הקבצים מוכנים. העבירו את התוכנה יחד עם התיקייה "$dbMirrorDirName" למחשב השני.',
+                style: _muted(context)),
+          ],
         ],
       ),
     );

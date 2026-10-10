@@ -8,10 +8,63 @@ import '../update/app_update.dart';
 import '../widgets/app_card.dart';
 
 class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key, required this.controller, required this.update});
+  const SettingsScreen({super.key, required this.controller, required this.update, required this.onLockNow});
 
   final AppController controller;
   final UpdateController update;
+
+  /// נועל מיד ועובר למסך העתקת הספרים.
+  final VoidCallback onLockNow;
+
+  /// דו-שיח להגדרת סיסמה (פעמיים). מחזיר את הסיסמה, או null בביטול.
+  Future<String?> _askNewPassword(BuildContext context) {
+    final a = TextEditingController(), b = TextEditingController();
+    String? err;
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) {
+          void submit() {
+            if (a.text.isEmpty) {
+              setSt(() => err = 'יש להקליד סיסמה');
+            } else if (a.text != b.text) {
+              setSt(() => err = 'הסיסמאות אינן זהות');
+            } else {
+              Navigator.pop(ctx, a.text);
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('סיסמת נעילה'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: a, obscureText: true, autofocus: true, decoration: const InputDecoration(labelText: 'סיסמה')),
+                const SizedBox(height: AppTokens.spaceSM),
+                TextField(
+                  controller: b,
+                  obscureText: true,
+                  onSubmitted: (_) => submit(),
+                  decoration: InputDecoration(labelText: 'הקלידו שוב', errorText: err),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ביטול')),
+              FilledButton(onPressed: submit, child: const Text('שמור')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _setPassword(BuildContext context, {required bool lockNow}) async {
+    final pw = await _askNewPassword(context);
+    if (pw == null) return;
+    controller.setLockPassword(pw);
+    if (lockNow) onLockNow();
+  }
 
   Future<void> _pickDir() async {
     final dir = await FilePicker.getDirectoryPath(dialogTitle: 'בחירת מיקום המאגר');
@@ -68,6 +121,67 @@ class SettingsScreen extends StatelessWidget {
                           selected: {c.themeMode},
                           onSelectionChanged: (s) => c.setThemeMode(s.first),
                         ),
+                      ),
+                    ),
+                    const SizedBox(height: AppTokens.spaceMD),
+                    AppCard(
+                      title: 'המסך שנפתח בהפעלת התוכנה',
+                      icon: FluentIcons.window_24_regular,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SegmentedButton<StartScreen>(
+                            showSelectedIcon: false,
+                            segments: const [
+                              ButtonSegment(value: StartScreen.home, label: Text('בית')),
+                              ButtonSegment(value: StartScreen.db, label: Text('מסד ספרים')),
+                              ButtonSegment(value: StartScreen.copy, label: Text('העתקת הספרים')),
+                            ],
+                            selected: {c.lockHash != null ? StartScreen.copy : c.startScreen},
+                            onSelectionChanged: c.lockHash != null ? null : (s) => c.setStartScreen(s.first),
+                          ),
+                          if (c.lockHash != null) ...[
+                            const SizedBox(height: AppTokens.spaceSM),
+                            Text('כשהתוכנה נעולה היא נפתחת תמיד במסך העתקת הספרים.', style: hint),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: AppTokens.spaceMD),
+                    AppCard(
+                      title: 'נעילה בסיסמה',
+                      icon: FluentIcons.lock_closed_24_regular,
+                      info: 'מתאים למי שמעביר את התוכנה למחשב של מישהו אחר: כשהנעילה פעילה, התוכנה נפתחת במסך '
+                          'העתקת הספרים בלבד, ואי אפשר לעבור למסכים אחרים בלי הסיסמה. ההגדרה נשמרת ליד התוכנה, '
+                          'כך שהיא עוברת יחד איתה בדיסק און קי.',
+                      child: Wrap(
+                        spacing: AppTokens.spaceSM,
+                        runSpacing: AppTokens.spaceSM,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: c.lockHash == null
+                            ? [
+                                FilledButton.icon(
+                                  onPressed: () => _setPassword(context, lockNow: true),
+                                  icon: const Icon(FluentIcons.lock_closed_24_regular),
+                                  label: const Text('הגדר סיסמה ונעל'),
+                                ),
+                                Text('התוכנה אינה נעולה.', style: hint),
+                              ]
+                            : [
+                                FilledButton.icon(
+                                  onPressed: onLockNow,
+                                  icon: const Icon(FluentIcons.lock_closed_24_regular),
+                                  label: const Text('נעל עכשיו'),
+                                ),
+                                OutlinedButton(
+                                  onPressed: () => _setPassword(context, lockNow: false),
+                                  child: const Text('שנה סיסמה'),
+                                ),
+                                TextButton(
+                                  onPressed: () => c.setLockPassword(null),
+                                  child: const Text('בטל את הנעילה'),
+                                ),
+                              ],
                       ),
                     ),
                     const SizedBox(height: AppTokens.spaceMD),

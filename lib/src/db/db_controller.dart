@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import '../controllers/app_controller.dart';
 import '../services/app_paths.dart';
+import '../services/otzaria_locator.dart';
 import '../services/repo_service.dart' show DownloadCancelled;
 import 'db_manifest.dart';
 import 'db_service.dart';
@@ -52,6 +53,13 @@ class DbController extends ChangeNotifier {
 
   LocalDbInfo? local;
   bool inspecting = false;
+
+  /// המקום שבו אוצריא שומרת את המסד במחשב הזה, אם נמצא.
+  String? otzariaDbPath;
+
+  /// יש עדכון למסד שבמחשב הזה (לפי הרשת).
+  bool get updateAvailable =>
+      remote != null && local != null && local!.state != LocalDbState.current && targetDb.isNotEmpty;
 
   /// גרסת המסד במחשב היעד (להכנה להעברה): עם גרסה מוכרת יורד רק קובץ העדכון שלה, בלעדיה המסד המלא.
   int? fromVersion;
@@ -111,6 +119,13 @@ class DbController extends ChangeNotifier {
         final c = j['shaCache'];
         if (c is Map<String, dynamic>) _shaCache = c;
       } catch (_) {}
+      otzariaDbPath = await OtzariaLocator.findDbPath();
+      // מחשב שעוד לא נבחר בו מיקום: ישר למקום שאוצריא קוראת ממנו, ואם המסד עוד לא צורף אליה,
+      // למיקום קבוע במסמכים (ואז מסבירים איך לצרף אותו).
+      if (targetDb.isEmpty) {
+        targetDb = otzariaDbPath ?? OtzariaLocator.defaultNewDbPath();
+        await _save();
+      }
     }
     await refreshMirror();
     if (targetDb.isNotEmpty) await inspectTarget();
@@ -212,6 +227,23 @@ class DbController extends ChangeNotifier {
     local = null;
     await _save();
     await inspectTarget();
+  }
+
+  Future<void> useOtzariaLocation() async {
+    final o = otzariaDbPath;
+    if (o != null) await setTarget(o);
+  }
+
+  /// הודעת כשל מובנת: קובץ נעול כמעט תמיד אומר שאוצריא פתוחה.
+  static String _failText(Object e) {
+    final t = e.toString();
+    final locked = t.contains('errno = 32') ||
+        t.contains('errno = 5') ||
+        t.contains('being used') ||
+        t.contains('Access is denied') ||
+        t.contains('בשימוש') ||
+        t.contains('הגישה נדחתה');
+    return locked ? 'אוצריא פתוחה כנראה. סגרו את אוצריא ונסו שוב.\n($t)' : 'העדכון נכשל: $t';
   }
 
   /// מזהה את גרסת המסד שביעד (חישוב SHA-256 על הקובץ).
@@ -382,7 +414,7 @@ class DbController extends ChangeNotifier {
     } catch (e) {
       final text = e.toString();
       final cancelled = text.contains('הפעולה בוטלה');
-      _msg(cancelled ? 'הפעולה נעצרה. המסד הקיים לא שונה.' : 'העדכון נכשל: $text', error: !cancelled);
+      _msg(cancelled ? 'הפעולה נעצרה. המסד הקיים לא שונה.' : _failText(e), error: !cancelled);
     }
     activity = null;
     notifyListeners();
@@ -453,16 +485,19 @@ class DbController extends ChangeNotifier {
     if (pl == null || !pl.canRun || busy) return;
     message = null;
     _cancel = false;
-    activity = DbActivity(pl.action == InstallAction.delta ? 'מעדכן את המסד' : 'מתקין את המסד');
+    activity = DbActivity('מעתיק את הספרים');
     notifyListeners();
     try {
       await _service.install(pl.artifact!, mirrorDir, targetDb, onProgress: _progress, isCancelled: () => _cancel);
-      _msg('המסד עודכן לגרסה ${mirror!.manifest.version}: $targetDb');
+      _msg(otzariaDbPath == targetDb
+          ? 'הספרים הועתקו בהצלחה (גרסה ${mirror!.manifest.version}). אפשר לפתוח את אוצריא.'
+          : 'הספרים הועתקו (גרסה ${mirror!.manifest.version}) לקובץ: $targetDb\n'
+              'אם המסד עוד לא מופיע באוצריא, צרפו אותו פעם אחת דרך הוספת מסד ספרים באוצריא ובחרו את הקובץ הזה.');
     } on DownloadCancelled {
       _msg('הפעולה נעצרה. המסד הקיים לא שונה.');
     } catch (e) {
       final text = e.toString();
-      _msg(text.contains('הפעולה בוטלה') ? 'הפעולה נעצרה. המסד הקיים לא שונה.' : 'העדכון נכשל: $text', error: !text.contains('בוטלה'));
+      _msg(text.contains('הפעולה בוטלה') ? 'הפעולה נעצרה. המסד הקיים לא שונה.' : _failText(e), error: !text.contains('בוטלה'));
     }
     activity = null;
     notifyListeners();

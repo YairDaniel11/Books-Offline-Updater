@@ -4,10 +4,9 @@ import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import '../controllers/app_controller.dart';
 import '../theme/app_tokens.dart';
 import '../widgets/info_icon.dart';
-import 'extract_screen.dart';
 import 'library_screen.dart';
 
-/// ספרים בודדים בפורמט TXT: בחירה והורדה של ספרים מסוימים, וחילוץ שלהם למחשב.
+/// ספרים בודדים בפורמט TXT: בחירה והורדה של ספרים מסוימים. החילוץ למחשב נמצא בלשונית "העתקת הספרים".
 /// מסומן במפורש כדרך שאינה הפשוטה; הדרך המומלצת היא מסד הספרים.
 class TxtBooksScreen extends StatefulWidget {
   const TxtBooksScreen({super.key, required this.controller, required this.onGoDb});
@@ -20,8 +19,6 @@ class TxtBooksScreen extends StatefulWidget {
 }
 
 class _TxtBooksScreenState extends State<TxtBooksScreen> {
-  int _tab = 0;
-
   AppController get c => widget.controller;
 
   @override
@@ -61,16 +58,6 @@ class _TxtBooksScreenState extends State<TxtBooksScreen> {
                   runSpacing: AppTokens.spaceSM,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    SegmentedButton<int>(
-                      showSelectedIcon: false,
-                      segments: const [
-                        ButtonSegment(value: 0, icon: Icon(FluentIcons.library_24_regular), label: Text('בחירה והורדה')),
-                        ButtonSegment(value: 1, icon: Icon(FluentIcons.arrow_download_24_regular), label: Text('חילוץ למחשב')),
-                      ],
-                      selected: {_tab},
-                      onSelectionChanged: (s) => setState(() => _tab = s.first),
-                    ),
-                    if (_tab == 0) ...[
                       OutlinedButton.icon(
                         onPressed: c.online && !c.busy && !c.checkingOnline ? c.checkOnline : null,
                         icon: const Icon(FluentIcons.arrow_sync_24_regular),
@@ -88,21 +75,12 @@ class _TxtBooksScreenState extends State<TxtBooksScreen> {
                         label: const Text('הורד את כל הספרים'),
                       ),
                       const InfoIcon('הורדת כל הספרים בפורמט TXT לקובץ אחד (קובץ המאגר), שאפשר לחלץ ממנו אחר כך. '
-                          'אם צריך ספר אחד בלבד, בחרו אותו מהרשימה.'),
-                    ],
+                          'אם צריך ספר אחד בלבד, בחרו אותו מהרשימה. להעתקה למחשב אחר: לשונית "העתקת הספרים".'),
                   ],
                 ),
               ),
             ),
-            Expanded(
-              child: IndexedStack(
-                index: _tab,
-                children: [
-                  LibraryScreen(controller: c),
-                  ExtractScreen(controller: c),
-                ],
-              ),
-            ),
+            Expanded(child: LibraryScreen(controller: c)),
           ],
         ),
       ),

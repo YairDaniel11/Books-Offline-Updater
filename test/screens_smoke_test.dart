@@ -1,5 +1,6 @@
 import 'package:books_offline_update/src/controllers/app_controller.dart';
 import 'package:books_offline_update/src/db/db_controller.dart';
+import 'package:books_offline_update/src/screens/copy_screen.dart';
 import 'package:books_offline_update/src/screens/db_screen.dart';
 import 'package:books_offline_update/src/screens/home_screen.dart';
 import 'package:books_offline_update/src/screens/settings_screen.dart';
@@ -34,7 +35,7 @@ void main() {
   testWidgets('לשונית המסד: פרטים טכניים סגורים כברירת מחדל', (t) async {
     await t.binding.setSurfaceSize(const Size(1200, 1400));
     await t.pumpWidget(host(DbScreen(db: db, app: app)));
-    expect(find.text('מחשב בלי אינטרנט'), findsOneWidget);
+    expect(find.text('הכנת ספרים למחשב בלי אינטרנט'), findsOneWidget);
     expect(find.text('פרטים טכניים'), findsOneWidget);
     expect(find.text('תיקיית קבצי המסד'), findsNothing); // מוסתר עד שפותחים
     await t.tap(find.text('פרטים טכניים'));
@@ -44,7 +45,15 @@ void main() {
 
   testWidgets('הגדרות', (t) async {
     await t.binding.setSurfaceSize(const Size(1200, 1400));
-    await t.pumpWidget(host(SettingsScreen(controller: app, update: UpdateController())));
+    await t.pumpWidget(host(SettingsScreen(controller: app, update: UpdateController(), onLockNow: () {})));
     expect(find.textContaining('למתקדמים'), findsOneWidget);
+  });
+
+  testWidgets('העתקת הספרים: כפתור גדול, מושבת כשאין קבצים', (t) async {
+    await t.binding.setSurfaceSize(const Size(1200, 1000));
+    await t.pumpWidget(host(CopyScreen(db: db, app: app, locked: true)));
+    expect(find.text('העתק את הספרים לאוצריא'), findsOneWidget);
+    expect(find.text('לא נמצאו קבצי ספרים להעתקה.'), findsOneWidget);
+    expect(find.text('קובץ המסד של אוצריא'), findsNothing); // נעול: בלי שינוי מיקומים
   });
 }
