@@ -234,6 +234,28 @@ class DbController extends ChangeNotifier {
     if (o != null) await setTarget(o);
   }
 
+  /// אוצריא נועלת את המסד ואת ההגדרות שלה: לא מתחילים כשהיא פתוחה.
+  Future<bool> _blockedByOtzaria() async {
+    if (!await OtzariaLocator.isRunning()) return false;
+    _msg('אוצריא פתוחה. סגרו את אוצריא ולחצו שוב.', error: true);
+    return true;
+  }
+
+  /// מצרף את המסד לאוצריא אם עוד לא צורף בנתיב הזה, כדי שהספרים יופיעו בה מעצמם.
+  /// מחזיר תוספת להודעת הסיום.
+  Future<String> _ensureAttached() async {
+    if (otzariaDbPath == targetDb) return '';
+    if (await OtzariaLocator.attach(targetDb)) {
+      otzariaDbPath = targetDb;
+      return ' הספרים יופיעו באוצריא בפתיחה הבאה.';
+    }
+    if (OtzariaLocator.dataRoot() == null) {
+      return '\nאוצריא לא נמצאה במחשב הזה. אחרי שתותקן ותיפתח פעם אחת, לחצו שוב על ההעתקה.';
+    }
+    return '\nלא הצלחתי לצרף את המסד לאוצריא. צרפו אותו ידנית באוצריא: הגדרות > ספרייה > מסדי ספרים אישיים > ייבא קובץ מסד, '
+        'ובחרו את הקובץ: $targetDb';
+  }
+
   /// הודעת כשל מובנת: קובץ נעול כמעט תמיד אומר שאוצריא פתוחה.
   static String _failText(Object e) {
     final t = e.toString();
@@ -372,6 +394,7 @@ class DbController extends ChangeNotifier {
   Future<void> updateNow() async {
     final r = remote;
     if (r == null || busy || targetDb.isEmpty) return;
+    if (await _blockedByOtzaria()) return;
     final m = r.manifest;
     message = null;
     _cancel = false;
@@ -390,7 +413,7 @@ class DbController extends ChangeNotifier {
         if (info.state == LocalDbState.current) {
           activity = null;
           local = info;
-          _msg('המסד כבר בגרסה העדכנית (${m.version}).');
+          _msg('המסד כבר בגרסה העדכנית (${m.version}).${await _ensureAttached()}');
           return;
         }
         if (info.delta != null) artifact = info.delta!;
@@ -408,7 +431,7 @@ class DbController extends ChangeNotifier {
           await File(DbService.partPath(mirrorDir, part)).delete();
         } catch (_) {}
       }
-      _msg('המסד עודכן לגרסה ${m.version}.');
+      _msg('המסד עודכן לגרסה ${m.version}.${await _ensureAttached()}');
     } on DownloadCancelled {
       _msg('הפעולה נעצרה. המסד הקיים לא שונה.');
     } catch (e) {
@@ -483,16 +506,15 @@ class DbController extends ChangeNotifier {
   Future<void> install() async {
     final pl = plan;
     if (pl == null || !pl.canRun || busy) return;
+    if (await _blockedByOtzaria()) return;
     message = null;
     _cancel = false;
     activity = DbActivity('מעתיק את הספרים');
     notifyListeners();
     try {
       await _service.install(pl.artifact!, mirrorDir, targetDb, onProgress: _progress, isCancelled: () => _cancel);
-      _msg(otzariaDbPath == targetDb
-          ? 'הספרים הועתקו בהצלחה (גרסה ${mirror!.manifest.version}). אפשר לפתוח את אוצריא.'
-          : 'הספרים הועתקו (גרסה ${mirror!.manifest.version}) לקובץ: $targetDb\n'
-              'אם המסד עוד לא מופיע באוצריא, צרפו אותו פעם אחת דרך הוספת מסד ספרים באוצריא ובחרו את הקובץ הזה.');
+      final attached = await _ensureAttached();
+      _msg('הספרים הועתקו בהצלחה (גרסה ${mirror!.manifest.version}).${attached.isEmpty ? ' אפשר לפתוח את אוצריא.' : attached}');
     } on DownloadCancelled {
       _msg('הפעולה נעצרה. המסד הקיים לא שונה.');
     } catch (e) {

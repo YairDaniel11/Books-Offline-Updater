@@ -44,6 +44,7 @@ dependencies:
   zstandard: ^1.5.0
   zstandard_native: ^1.5.0
   ed25519_edwards: ^0.3.2
+  hive_ce: ^2.20.1
 
 dev_dependencies:
   flutter_test:
