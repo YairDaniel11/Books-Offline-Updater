@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
@@ -5,6 +7,7 @@ import 'package:path/path.dart' as p;
 
 import '../controllers/app_controller.dart';
 import '../db/db_controller.dart';
+import '../db/db_manifest.dart' show dbLibraryId;
 import '../theme/app_tokens.dart';
 import '../widgets/activity_card.dart';
 import '../widgets/app_card.dart';
@@ -27,6 +30,12 @@ class CopyScreen extends StatelessWidget {
     if (f?.path != null) await db.setTarget(f!.path!);
   }
 
+  /// מחשב שאין בו מסד: בוחרים תיקייה, והמסד ייווצר בה.
+  Future<void> _pickNewFolder() async {
+    final dir = await FilePicker.getDirectoryPath(dialogTitle: 'בחירת תיקייה למסד');
+    if (dir != null) await db.setTarget(p.join(dir, '$dbLibraryId.db'));
+  }
+
   Future<void> _pickMirror() async {
     final dir = await FilePicker.getDirectoryPath(dialogTitle: 'בחירת התיקייה שבה נמצאים קבצי הספרים');
     if (dir != null) await db.setMirrorDir(dir);
@@ -46,7 +55,13 @@ class CopyScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _DbCopyCard(db: db, locked: locked, onPickTarget: _pickTarget, onPickMirror: _pickMirror),
+                    _DbCopyCard(
+                      db: db,
+                      locked: locked,
+                      onPickTarget: _pickTarget,
+                      onPickNewFolder: _pickNewFolder,
+                      onPickMirror: _pickMirror,
+                    ),
                     if (app.pakFileCount > 0) ...[
                       const SizedBox(height: AppTokens.spaceMD),
                       _TxtCopyCard(app: app, db: db),
@@ -63,10 +78,17 @@ class CopyScreen extends StatelessWidget {
 }
 
 class _DbCopyCard extends StatelessWidget {
-  const _DbCopyCard({required this.db, required this.locked, required this.onPickTarget, required this.onPickMirror});
+  const _DbCopyCard({
+    required this.db,
+    required this.locked,
+    required this.onPickTarget,
+    required this.onPickNewFolder,
+    required this.onPickMirror,
+  });
   final DbController db;
   final bool locked;
   final VoidCallback onPickTarget;
+  final VoidCallback onPickNewFolder;
   final VoidCallback onPickMirror;
 
   @override
@@ -97,6 +119,11 @@ class _DbCopyCard extends StatelessWidget {
       switch (plan.action) {
         case InstallAction.none:
           status = _Status.ok('הספרים במחשב הזה מעודכנים', 'גרסה ${m?.version}. אין צורך לעשות דבר.');
+        case InstallAction.full when !File(db.targetDb).existsSync():
+          status = _Status.update(
+            'הספרים עוד לא מותקנים במחשב הזה',
+            'לחצו על הכפתור כדי להתקין (גרסה ${m?.version}). הספרים יופיעו באוצריא מעצמם.',
+          );
         case InstallAction.delta:
         case InstallAction.full:
           final from = db.local?.version;
@@ -151,8 +178,11 @@ class _DbCopyCard extends StatelessWidget {
             _PathRow(
               label: 'קובץ המסד של אוצריא',
               value: db.targetDb.isEmpty ? 'לא נמצא' : db.targetDb,
-              action: 'שנה',
-              onAction: db.busy ? null : onPickTarget,
+              menu: [
+                ('יש לי קובץ מסד', FluentIcons.document_24_regular, onPickTarget),
+                ('אין מסד: בחר תיקייה למסד החדש', FluentIcons.folder_add_24_regular, onPickNewFolder),
+              ],
+              enabled: !db.busy,
               extra: db.otzariaDbPath != null && db.otzariaDbPath != db.targetDb && !db.busy
                   ? TextButton(onPressed: db.useOtzariaLocation, child: const Text('השתמש במיקום של אוצריא'))
                   : null,
@@ -160,8 +190,8 @@ class _DbCopyCard extends StatelessWidget {
             _PathRow(
               label: 'קבצי הספרים להעתקה',
               value: db.mirrorDir,
-              action: 'שנה',
-              onAction: db.busy ? null : onPickMirror,
+              menu: [('בחר תיקייה', FluentIcons.folder_open_24_regular, onPickMirror)],
+              enabled: !db.busy,
             ),
           ],
         ],
@@ -304,11 +334,13 @@ class _ResultBox extends StatelessWidget {
 }
 
 class _PathRow extends StatelessWidget {
-  const _PathRow({required this.label, required this.value, required this.action, this.onAction, this.extra});
+  const _PathRow({required this.label, required this.value, required this.menu, required this.enabled, this.extra});
   final String label;
   final String value;
-  final String action;
-  final VoidCallback? onAction;
+
+  /// אפשרויות כפתור "שנה": אחת = לחיצה ישירה, כמה = תפריט.
+  final List<(String, IconData, VoidCallback)> menu;
+  final bool enabled;
   final Widget? extra;
 
   @override
@@ -320,7 +352,19 @@ class _PathRow extends StatelessWidget {
         SizedBox(width: 150, child: Text(label, style: muted)),
         Expanded(child: SelectableText(value, style: muted)),
         ?extra,
-        TextButton(onPressed: onAction, child: Text(action)),
+        if (menu.length == 1)
+          TextButton(onPressed: enabled ? menu.first.$3 : null, child: const Text('שנה'))
+        else
+          MenuAnchor(
+            menuChildren: [
+              for (final (text, icon, onTap) in menu)
+                MenuItemButton(leadingIcon: Icon(icon), onPressed: onTap, child: Text(text)),
+            ],
+            builder: (context, c, _) => TextButton(
+              onPressed: enabled ? () => c.isOpen ? c.close() : c.open() : null,
+              child: const Text('שנה'),
+            ),
+          ),
       ]),
     );
   }
