@@ -259,7 +259,8 @@ class _OfflineCard extends StatelessWidget {
       icon: FluentIcons.cloud_off_24_regular,
       info: 'מכינים כאן קבצים, מעבירים את התוכנה יחד עם התיקייה "$dbMirrorDirName" (למשל בדיסק און קי) '
           'למחשב שאין בו רשת, ושם פותחים את לשונית "העתקת הספרים". אם יש עותק של המסד של המחשב השני, '
-          'בחרו אותו והתוכנה תוריד רק את מה שחסר לו; בלי עותק יורד המסד המלא.',
+          'בחרו אותו והתוכנה תוריד רק את מה שחסר לו; אפשר גם לבחור ידנית את הגרסה שיש לו '
+          'ולהוריד רק את קובץ העדכון שלה. בלי בחירה יורד המסד המלא.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -277,6 +278,32 @@ class _OfflineCard extends StatelessWidget {
                 TextButton(onPressed: db.busy ? null : db.clearTransferVersion, child: const Text('אין לו מסד')),
             ],
           ),
+          if (r != null && r.deltas.isNotEmpty) ...[
+            const SizedBox(height: AppTokens.spaceSM),
+            Wrap(
+              spacing: AppTokens.spaceSM,
+              runSpacing: AppTokens.spaceSM,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const Text('או בחרו ידנית:'),
+                DropdownButton<int?>(
+                  value: db.fromVersion,
+                  onChanged: db.busy ? null : db.setFromVersion,
+                  items: [
+                    DropdownMenuItem<int?>(
+                      value: null,
+                      child: Text('המסד המלא (${DbController.formatBytes(r.full.downloadSize)})'),
+                    ),
+                    for (final d in r.deltas)
+                      DropdownMenuItem<int?>(
+                        value: d.fromVersion,
+                        child: Text('קובץ עדכון מגרסה ${d.fromVersion} (${DbController.formatBytes(d.downloadSize)})'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: AppTokens.spaceSM),
           Text(r == null
               ? 'ההכנה זמינה רק עם חיבור לרשת.'
