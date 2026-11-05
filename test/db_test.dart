@@ -123,4 +123,38 @@ void main() {
       svc.close();
     }, skip: exe == null || lib == null ? 'חסרים ZSTD_EXE / ZSTD_LIB_PATH' : false);
   });
+  group('שרשרת צעדי עדכון', () {
+    String h(int n) => n.toString().padLeft(64, '0');
+    Map<String, dynamic> step(int from) => {
+          'from_db_version': from,
+          'to_db_version': from + 1,
+          'from_sha256': h(from),
+          'compression': 'zstd-patch',
+          'size': 1000,
+          'sha256': h(from + 1),
+          'parts': [
+            {'url': 'https://example.com/d/a-${from + 1}.from-$from.patch.zst', 'size': 10, 'sha256': h(99)},
+          ],
+        };
+    StepsManifest steps(List<int> froms) => StepsManifest.parse(Uint8List.fromList(utf8.encode(jsonEncode({
+          'format': 1,
+          'library_id': dbLibraryId,
+          'db_version': 40,
+          'steps': [for (final f in froms) step(f)],
+        }))));
+
+    test('שרשרת רציפה מגרסה ישנה עד העדכנית', () {
+      final m = steps([36, 37, 38, 39]);
+      final c = m.chainFromSha(h(36), h(40))!;
+      expect(c.map((a) => a.fromVersion), [36, 37, 38, 39]);
+      expect(m.chainFromVersion(38, h(40))!.length, 2);
+    });
+
+    test('חור בשרשרת או גרסה לא מוכרת: אין שרשרת', () {
+      final m = steps([36, 38, 39]);
+      expect(m.chainFromSha(h(36), h(40)), isNull);
+      expect(m.chainFromSha(h(35), h(40)), isNull);
+      expect(m.chainFromSha(h(40), h(40)), isEmpty);
+    });
+  });
 }

@@ -13,6 +13,11 @@ import 'zstd_stream.dart';
 /// כתובת קבועה של המניפסט העדכני (release בשם `db`). הקבצים עצמם ב-`db-v<N>`.
 const dbManifestUrl = 'https://github.com/$githubRepo/releases/download/db/manifest.json';
 
+/// צעדי עדכון בין גרסאות עוקבות: release נפרד שלא נמחק (db-steps).
+const stepsManifestUrl = 'https://github.com/$githubRepo/releases/download/db-steps/steps-manifest.json';
+
+const stepsFileName = 'steps-manifest.json';
+const stepsSigFileName = 'steps-manifest.json.sig';
 const manifestFileName = 'manifest.json';
 const manifestSigFileName = 'manifest.json.sig';
 
@@ -22,6 +27,13 @@ class DbRelease {
   final Uint8List manifestBytes;
   final String signature;
   final DbManifest manifest;
+}
+
+class StepsRelease {
+  StepsRelease(this.manifestBytes, this.signature, this.manifest);
+  final Uint8List manifestBytes;
+  final String signature;
+  final StepsManifest manifest;
 }
 
 class DbException implements Exception {
@@ -43,13 +55,16 @@ enum LocalDbState {
 }
 
 class LocalDbInfo {
-  LocalDbInfo(this.sha256, this.state, {this.version, this.delta});
+  LocalDbInfo(this.sha256, this.state, {this.version, this.delta, this.updates});
   final String sha256;
   final LocalDbState state;
 
   /// גרסת המסד המקומי, כשזוהתה לפי קובץ עדכון.
   final int? version;
   final DbArtifact? delta;
+
+  /// הקבצים שיש להחיל לפי הסדר כדי להגיע לגרסה העדכנית: קובץ עדכון אחד, או שרשרת צעדים.
+  final List<DbArtifact>? updates;
 }
 
 typedef ProgressCallback = void Function(int done, int? total, String detail);
@@ -103,6 +118,36 @@ class DbService {
       throw DbException(e.message);
     } catch (e) {
       throw DbException('לא ניתן לבדוק את גרסת המסד ($e)');
+    }
+  }
+
+  StepsRelease _verifySteps(Uint8List bytes, String sig) {
+    if (!verifyManifestSignature(bytes, sig)) throw DbException('צעדי העדכון לא אומתו כמקוריים');
+    final m = StepsManifest.parse(bytes);
+    if (m.libraryId != dbLibraryId) throw DbException('צעדי העדכון שייכים למסד אחר');
+    return StepsRelease(bytes, sig, m);
+  }
+
+  /// צעדי העדכון ברשת. `null` כשאין כאלה או שאי אפשר לקרוא אותם: אז פשוט אין שרשרת.
+  Future<StepsRelease?> fetchSteps() async {
+    try {
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final bytes = await _getBytes('$stepsManifestUrl?t=$stamp');
+      final sig = utf8.decode(await _getBytes('$stepsManifestUrl.sig?t=$stamp'));
+      return _verifySteps(bytes, sig);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<StepsRelease?> readMirrorSteps(String dir) async {
+    final mf = File(p.join(dir, stepsFileName));
+    final sf = File(p.join(dir, stepsSigFileName));
+    if (!await mf.exists() || !await sf.exists()) return null;
+    try {
+      return _verifySteps(await mf.readAsBytes(), await sf.readAsString());
+    } catch (_) {
+      return null;
     }
   }
 
@@ -235,6 +280,7 @@ class DbService {
     String dir, {
     required ProgressCallback onProgress,
     required bool Function() isCancelled,
+    StepsRelease? steps,
   }) async {
     await Directory(dir).create(recursive: true);
     final parts = [for (final a in artifacts) ...a.parts];
@@ -254,7 +300,11 @@ class DbService {
     // המניפסט נשמר אחרון: מראה עם מניפסט תמיד מצביעה על קבצים שלמים.
     await _writeAtomic(File(p.join(dir, manifestFileName)), release.manifestBytes);
     await _writeAtomic(File(p.join(dir, manifestSigFileName)), utf8.encode(release.signature));
-    await _cleanOrphans(dir, release.manifest);
+    if (steps != null) {
+      await _writeAtomic(File(p.join(dir, stepsFileName)), steps.manifestBytes);
+      await _writeAtomic(File(p.join(dir, stepsSigFileName)), utf8.encode(steps.signature));
+    }
+    await _cleanOrphans(dir, release.manifest, steps?.manifest ?? (await readMirrorSteps(dir))?.manifest);
   }
 
   Future<void> _writeAtomic(File f, List<int> bytes) async {
@@ -264,9 +314,9 @@ class DbService {
   }
 
   /// מוחק מהמראה קבצי גרסאות קודמות שאינם מופיעים במניפסט הנוכחי (רק קבצים שהתוכנה יצרה).
-  Future<void> _cleanOrphans(String dir, DbManifest m) async {
+  Future<void> _cleanOrphans(String dir, DbManifest m, StepsManifest? steps) async {
     final keep = <String>{
-      for (final a in [m.full, ...m.deltas]) ...a.parts.map((e) => e.fileName),
+      for (final a in [m.full, ...m.deltas, ...?steps?.steps]) ...a.parts.map((e) => e.fileName),
     };
     try {
       await for (final e in Directory(dir).list()) {
@@ -287,11 +337,17 @@ class DbService {
     void Function(int done, int total)? onProgress,
     bool Function()? isCancelled,
     String? knownSha,
+    StepsManifest? steps,
+    bool Function(List<DbArtifact> chain)? chainIsWorthIt,
   }) async {
     final sha = knownSha ?? await sha256OfFile(path, onProgress: onProgress, isCancelled: isCancelled);
     if (sha == m.full.sha256) return LocalDbInfo(sha, LocalDbState.current, version: m.version);
     final d = m.deltaForSha(sha);
-    if (d != null) return LocalDbInfo(sha, LocalDbState.hasDelta, version: d.fromVersion, delta: d);
+    if (d != null) return LocalDbInfo(sha, LocalDbState.hasDelta, version: d.fromVersion, delta: d, updates: [d]);
+    final chain = steps?.chainFromSha(sha, m.full.sha256);
+    if (chain != null && chain.isNotEmpty && (chainIsWorthIt?.call(chain) ?? true)) {
+      return LocalDbInfo(sha, LocalDbState.hasDelta, version: chain.first.fromVersion, updates: chain);
+    }
     return LocalDbInfo(sha, LocalDbState.unknown);
   }
 

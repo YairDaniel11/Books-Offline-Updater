@@ -116,6 +116,8 @@ class DbManifest {
     );
   }
 
+  static DbArtifact artifactFrom(Object? a, {required bool delta}) => _artifact(a, delta: delta);
+
   static DbArtifact _artifact(Object? a, {required bool delta}) {
     if (a is! Map<String, dynamic>) throw DbManifestException('חסר רכיב בנתוני הגרסה');
     final comp = a['compression'];
@@ -163,6 +165,73 @@ class DbManifest {
       parts: parts,
       fromVersion: delta ? fromV as int : null,
       fromSha256: delta ? fromSha as String : null,
+    );
+  }
+}
+
+/// צעדי עדכון בין גרסאות עוקבות (ברילס נפרד): שרשרת קטנה שמגיעה מכל גרסה ישנה לעדכנית,
+/// כך שאין צורך להוריד את המסד כולו. מנוהל בנפרד מהמניפסט הראשי, שאוצריא עצמה קוראת.
+class StepsManifest {
+  StepsManifest({required this.libraryId, required this.version, required this.steps});
+
+  final String libraryId;
+  final int version;
+  final List<DbArtifact> steps;
+
+  /// שרשרת צעדים מגרסה עם ה-sha256 הנתון עד [targetSha]; `null` אם אין רצף שלם.
+  List<DbArtifact>? chainFromSha(String sha, String targetSha) {
+    if (sha == targetSha) return const [];
+    final chain = <DbArtifact>[];
+    var cur = sha;
+    final seen = <String>{cur};
+    while (chain.length < 200) {
+      DbArtifact? next;
+      for (final s in steps) {
+        if (s.fromSha256 == cur) {
+          next = s;
+          break;
+        }
+      }
+      if (next == null) return null;
+      chain.add(next);
+      cur = next.sha256;
+      if (cur == targetSha) return chain;
+      if (!seen.add(cur)) return null;
+    }
+    return null;
+  }
+
+  /// שרשרת שמתחילה מגרסה מספרית נתונה.
+  List<DbArtifact>? chainFromVersion(int v, String targetSha) {
+    for (final s in steps) {
+      if (s.fromVersion == v) {
+        final c = chainFromSha(s.fromSha256!, targetSha);
+        if (c != null && c.isNotEmpty) return c;
+      }
+    }
+    return null;
+  }
+
+  static StepsManifest parse(Uint8List bytes) {
+    final Object? j;
+    try {
+      j = jsonDecode(utf8.decode(bytes));
+    } catch (_) {
+      throw DbManifestException('נתוני צעדי העדכון אינם תקינים');
+    }
+    if (j is! Map<String, dynamic> || j['format'] != 1) {
+      throw DbManifestException('פורמט צעדי העדכון לא נתמך');
+    }
+    final lib = j['library_id'];
+    final ver = j['db_version'];
+    final raw = j['steps'];
+    if (lib is! String || lib.isEmpty || ver is! int || ver < 1 || raw is! List) {
+      throw DbManifestException('נתוני צעדי העדכון אינם תקינים');
+    }
+    return StepsManifest(
+      libraryId: lib,
+      version: ver,
+      steps: [for (final s in raw) DbManifest.artifactFrom(s, delta: true)],
     );
   }
 }

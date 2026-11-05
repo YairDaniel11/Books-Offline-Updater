@@ -278,7 +278,7 @@ class _OfflineCard extends StatelessWidget {
                 TextButton(onPressed: db.busy ? null : db.clearTransferVersion, child: const Text('אין לו מסד')),
             ],
           ),
-          if (r != null && r.deltas.isNotEmpty) ...[
+          if (r != null && db.versionOptions.isNotEmpty) ...[
             const SizedBox(height: AppTokens.spaceSM),
             Wrap(
               spacing: AppTokens.spaceSM,
@@ -294,10 +294,10 @@ class _OfflineCard extends StatelessWidget {
                       value: null,
                       child: Text('המסד המלא (${DbController.formatBytes(r.full.downloadSize)})'),
                     ),
-                    for (final d in r.deltas)
+                    for (final o in db.versionOptions)
                       DropdownMenuItem<int?>(
-                        value: d.fromVersion,
-                        child: Text('קובץ עדכון מגרסה ${d.fromVersion} (${DbController.formatBytes(d.downloadSize)})'),
+                        value: o.version,
+                        child: Text('עדכון מגרסה ${o.version} (${DbController.formatBytes(o.bytes)})'),
                       ),
                   ],
                 ),

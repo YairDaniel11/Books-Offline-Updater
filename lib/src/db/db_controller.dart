@@ -15,10 +15,14 @@ enum InstallAction { none, delta, full, blocked }
 
 /// מה ייעשה בלחיצה על "התקן": לפי המסד שביעד ומה שיש במראה.
 class InstallPlan {
-  InstallPlan(this.action, this.message, {this.artifact});
+  InstallPlan(this.action, this.message, {this.artifact, this.artifacts});
   final InstallAction action;
   final String message;
   final DbArtifact? artifact;
+
+  /// קבצים להחלה לפי הסדר (שרשרת צעדי עדכון); כשחסר, הפעולה היא [artifact] בלבד.
+  final List<DbArtifact>? artifacts;
+  List<DbArtifact> get all => artifacts ?? [artifact!];
   bool get canRun => action == InstallAction.delta || action == InstallAction.full;
 }
 
@@ -45,6 +49,10 @@ class DbController extends ChangeNotifier {
   String targetDb = '';
 
   DbRelease? remote;
+
+  /// צעדי עדכון בין גרסאות עוקבות (ברילס נפרד), ברשת ובתיקיית המראה. ללא: אין שרשרת.
+  StepsRelease? remoteSteps;
+  StepsRelease? mirrorSteps;
   String? remoteError;
   bool checking = false;
 
@@ -56,6 +64,10 @@ class DbController extends ChangeNotifier {
 
   /// המקום שבו אוצריא שומרת את המסד במחשב הזה, אם נמצא.
   String? otzariaDbPath;
+
+  /// שרשרת צעדים משתלמת רק כשהסכום שלה קטן מהורדת המסד המלא.
+  static bool _worthIt(List<DbArtifact> chain, DbManifest m) =>
+      chain.fold<int>(0, (a, c) => a + c.downloadSize) < m.full.downloadSize;
 
   /// יש עדכון למסד שבמחשב הזה (לפי הרשת).
   bool get updateAvailable =>
@@ -189,9 +201,9 @@ class DbController extends ChangeNotifier {
     notifyListeners();
     try {
       remote = await _service.fetchRemote();
-      final m = remote!.manifest;
+      remoteSteps = await _service.fetchSteps();
       // ברירת מחדל לבחירת גרסה: אם נבחרה גרסה שאינה קיימת עוד, חוזרים ל"כולן".
-      if (fromVersion != null && m.deltaForVersion(fromVersion!) == null) fromVersion = null;
+      if (fromVersion != null && !versionOptions.any((o) => o.version == fromVersion)) fromVersion = null;
     } catch (e) {
       remote = null;
       remoteError = e is DbException ? e.message : 'אין חיבור לרשת';
@@ -207,6 +219,7 @@ class DbController extends ChangeNotifier {
     mirrorError = null;
     try {
       mirror = await _service.readMirror(mirrorDir);
+      mirrorSteps = await _service.readMirrorSteps(mirrorDir);
     } catch (e) {
       mirror = null;
       mirrorError = e.toString();
@@ -283,7 +296,13 @@ class DbController extends ChangeNotifier {
     inspecting = true;
     notifyListeners();
     try {
-      local = await _service.inspectLocalDb(m, targetDb, knownSha: await _cachedSha(targetDb));
+      local = await _service.inspectLocalDb(
+        m,
+        targetDb,
+        knownSha: await _cachedSha(targetDb),
+        steps: (mirrorSteps ?? remoteSteps)?.manifest,
+        chainIsWorthIt: (c) => _worthIt(c, m),
+      );
       await _rememberSha(targetDb, local!.sha256);
     } catch (e) {
       _msg('לא ניתן לקרוא את הקובץ: $e', error: true);
@@ -299,7 +318,12 @@ class DbController extends ChangeNotifier {
     inspecting = true;
     notifyListeners();
     try {
-      final info = await _service.inspectLocalDb(m, path);
+      final info = await _service.inspectLocalDb(
+        m,
+        path,
+        steps: remoteSteps?.manifest,
+        chainIsWorthIt: (c) => _worthIt(c, m),
+      );
       switch (info.state) {
         case LocalDbState.current:
           fromVersion = null;
@@ -327,8 +351,31 @@ class DbController extends ChangeNotifier {
     if (v != null) {
       final d = m.deltaForVersion(v);
       if (d != null) return [d];
+      final c = remoteSteps?.manifest.chainFromVersion(v, m.full.sha256);
+      if (c != null && _worthIt(c, m)) return c;
     }
     return [m.full];
+  }
+
+  /// הגרסאות שאפשר להכין להן עדכון (קובץ עדכון ישיר או שרשרת משתלמת), מהחדשה לישנה, עם גודל ההורדה.
+  List<({int version, int bytes})> get versionOptions {
+    final m = remote?.manifest;
+    if (m == null) return const [];
+    final out = <int, int>{};
+    for (final d in m.deltas) {
+      out[d.fromVersion!] = d.downloadSize;
+    }
+    final st = remoteSteps?.manifest;
+    if (st != null) {
+      for (final s in st.steps) {
+        final v = s.fromVersion!;
+        if (out.containsKey(v)) continue;
+        final c = st.chainFromVersion(v, m.full.sha256);
+        if (c != null && _worthIt(c, m)) out[v] = c.fold<int>(0, (a, b) => a + b.downloadSize);
+      }
+    }
+    final keys = out.keys.toList()..sort((a, b) => b.compareTo(a));
+    return [for (final k in keys) (version: k, bytes: out[k]!)];
   }
 
   /// כמה בתים עוד חסרים במראה עבור הבחירה הנוכחית.
@@ -356,7 +403,8 @@ class DbController extends ChangeNotifier {
     activity = DbActivity(list.first.isDelta ? 'מוריד קובץ עדכון' : 'מוריד את המסד המלא');
     notifyListeners();
     try {
-      await _service.download(r, list, mirrorDir, onProgress: _progress, isCancelled: () => _cancel);
+      await _service.download(r, list, mirrorDir,
+          onProgress: _progress, isCancelled: () => _cancel, steps: remoteSteps);
       _msg('ההורדה הסתיימה (גרסה ${r.manifest.version}). הקבצים בתיקייה: $mirrorDir');
     } on DownloadCancelled {
       _msg('ההורדה נעצרה. ניתן להמשיך אותה בהמשך מאותה נקודה.');
@@ -401,7 +449,7 @@ class DbController extends ChangeNotifier {
     activity = DbActivity('בודק את המסד');
     notifyListeners();
     try {
-      DbArtifact artifact = m.full;
+      var artifacts = <DbArtifact>[m.full];
       if (await File(targetDb).exists()) {
         final info = await _service.inspectLocalDb(
           m,
@@ -409,6 +457,8 @@ class DbController extends ChangeNotifier {
           onProgress: (d, t) => _progress(d, t, 'מזהה את גרסת המסד'),
           isCancelled: () => _cancel,
           knownSha: await _cachedSha(targetDb),
+          steps: remoteSteps?.manifest,
+          chainIsWorthIt: (c) => _worthIt(c, m),
         );
         if (info.state == LocalDbState.current) {
           activity = null;
@@ -416,20 +466,31 @@ class DbController extends ChangeNotifier {
           _msg('המסד כבר בגרסה העדכנית (${m.version}).${await _ensureAttached()}');
           return;
         }
-        if (info.delta != null) artifact = info.delta!;
+        if (info.updates != null) artifacts = info.updates!;
       }
-      activity!.title = artifact.isDelta ? 'מוריד עדכון' : 'מוריד את המסד המלא';
+      final isDelta = artifacts.first.isDelta;
+      activity!.title = isDelta ? 'מוריד עדכון' : 'מוריד את המסד המלא';
       notifyListeners();
-      await _service.download(r, [artifact], mirrorDir, onProgress: _progress, isCancelled: () => _cancel);
-      activity!.title = artifact.isDelta ? 'מעדכן את המסד' : 'מתקין את המסד';
-      notifyListeners();
-      await _service.install(artifact, mirrorDir, targetDb, onProgress: _progress, isCancelled: () => _cancel);
-      await _rememberSha(targetDb, artifact.sha256);
-      // הקבצים כבר הוחלו: לא משאירים ~400MB מיותרים בדיסק.
-      for (final part in artifact.parts) {
-        try {
-          await File(DbService.partPath(mirrorDir, part)).delete();
-        } catch (_) {}
+      await _service.download(r, artifacts, mirrorDir,
+          onProgress: _progress, isCancelled: () => _cancel, steps: remoteSteps);
+      for (var i = 0; i < artifacts.length; i++) {
+        final a = artifacts[i];
+        activity!.title = !isDelta
+            ? 'מתקין את המסד'
+            : artifacts.length > 1
+                ? 'מעדכן את המסד (${i + 1} מתוך ${artifacts.length})'
+                : 'מעדכן את המסד';
+        notifyListeners();
+        await _service.install(a, mirrorDir, targetDb, onProgress: _progress, isCancelled: () => _cancel);
+        await _rememberSha(targetDb, a.sha256);
+      }
+      // הקבצים כבר הוחלו: לא משאירים מאות MB מיותרים בדיסק.
+      for (final a in artifacts) {
+        for (final part in a.parts) {
+          try {
+            await File(DbService.partPath(mirrorDir, part)).delete();
+          } catch (_) {}
+        }
       }
       _msg('המסד עודכן לגרסה ${m.version}.${await _ensureAttached()}');
     } on DownloadCancelled {
@@ -470,12 +531,16 @@ class DbController extends ChangeNotifier {
       case LocalDbState.current:
         return InstallPlan(InstallAction.none, 'המסד כבר בגרסה העדכנית (${m.version}).');
       case LocalDbState.hasDelta:
-        final d = info.delta!;
-        if (DbService.isComplete(d, mirrorDir)) {
+        final ups = info.updates ?? [info.delta!];
+        if (ups.every((u) => DbService.isComplete(u, mirrorDir))) {
+          final size = formatBytes(ups.fold<int>(0, (a, b) => a + b.downloadSize));
           return InstallPlan(
             InstallAction.delta,
-            'גרסה ${info.version} ← ${m.version}: יוחל קובץ עדכון (${formatBytes(d.downloadSize)}).',
-            artifact: d,
+            ups.length == 1
+                ? 'גרסה ${info.version} ← ${m.version}: יוחל קובץ עדכון ($size).'
+                : 'גרסה ${info.version} ← ${m.version}: יוחלו ${ups.length} קבצי עדכון ברצף ($size).',
+            artifact: ups.first,
+            artifacts: ups,
           );
         }
         if (fullOk) {
@@ -512,7 +577,9 @@ class DbController extends ChangeNotifier {
     activity = DbActivity('מעתיק את הספרים');
     notifyListeners();
     try {
-      await _service.install(pl.artifact!, mirrorDir, targetDb, onProgress: _progress, isCancelled: () => _cancel);
+      for (final a in pl.all) {
+        await _service.install(a, mirrorDir, targetDb, onProgress: _progress, isCancelled: () => _cancel);
+      }
       final attached = await _ensureAttached();
       _msg('הספרים הועתקו בהצלחה (גרסה ${mirror!.manifest.version}).${attached.isEmpty ? ' אפשר לפתוח את אוצריא.' : attached}');
     } on DownloadCancelled {
