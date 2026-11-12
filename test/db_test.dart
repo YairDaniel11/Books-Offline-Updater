@@ -164,19 +164,34 @@ void main() {
     });
   });
 
+  test('התאוששות לא נוגעת ב-.new שנכתב ממש עכשיו (תהליך אחר פעיל)', () async {
+    final d = Directory.systemTemp.createTempSync('rec2');
+    try {
+      final target = p.join(d.path, 'x.db');
+      File('$target.old').writeAsStringSync('old');
+      File('$target.new').writeAsStringSync('being written');
+      await DbService.recoverInterrupted(target);
+      expect(File('$target.new').existsSync(), isTrue);
+      expect(File('$target.old').existsSync(), isTrue);
+      expect(File(target).existsSync(), isFalse);
+    } finally {
+      d.deleteSync(recursive: true);
+    }
+  });
+
   test('התאוששות מהפסקה בהחלפת המסד: .old חוזר כשהיעד חסר', () async {
     final d = Directory.systemTemp.createTempSync('rec');
     try {
       final target = p.join(d.path, 'x.db');
       File('$target.old').writeAsStringSync('old');
       File('$target.new').writeAsStringSync('partial');
-      await DbService.recoverInterrupted(target);
+      await DbService.recoverInterrupted(target, liveWindow: Duration.zero);
       expect(File(target).readAsStringSync(), 'old');
       expect(File('$target.old').existsSync(), isFalse);
       expect(File('$target.new').existsSync(), isFalse);
       // יעד קיים: לא נוגעים בו
       File('$target.old').writeAsStringSync('older');
-      await DbService.recoverInterrupted(target);
+      await DbService.recoverInterrupted(target, liveWindow: Duration.zero);
       expect(File(target).readAsStringSync(), 'old');
     } finally {
       d.deleteSync(recursive: true);

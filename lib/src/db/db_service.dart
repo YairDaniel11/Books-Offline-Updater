@@ -438,14 +438,49 @@ class DbService {
     return deleted;
   }
 
+  static const _sqliteHeader = 'SQLite format 3\u0000';
+
+  /// האם הקובץ נראה כמסד SQLite: כותרת "SQLite format 3\0". קובץ שחסר או ריק נחשב תקין (ייווצר מסד חדש).
+  static Future<bool> looksLikeSqlite(String path) async {
+    final f = File(path);
+    if (!await f.exists()) return true;
+    final len = await f.length();
+    if (len == 0) return true;
+    if (len < _sqliteHeader.length) return false;
+    RandomAccessFile? raf;
+    try {
+      raf = await f.open();
+      final head = await raf.read(_sqliteHeader.length);
+      return String.fromCharCodes(head) == _sqliteHeader;
+    } finally {
+      await raf?.close();
+    }
+  }
+
+  /// כמה מקום פנוי דרוש בכונן של היעד: החלקים שעוד צריך להוריד, ואת התוצאה (`.new`) לצד הקובץ הקיים.
+  /// בשרשרת צעדים הצעדים מוחלים בזה אחר זה, ולכן נספר הגדול שבהם. מרווח קטן לתקורה.
+  static int requiredBytes(List<DbArtifact> artifacts, {int bytesToDownload = 0}) {
+    var biggest = 0;
+    for (final a in artifacts) {
+      if (a.size > biggest) biggest = a.size;
+    }
+    return bytesToDownload + biggest + 64 * 1024 * 1024;
+  }
+
   /// התאוששות מהפסקה (קריסה, כיבוי) בין "יעד ← .old" ל-".new ← יעד" בהחלפת המסד:
   /// אם אין קובץ יעד אבל יש `.old`, מחזירים אותו. מנקים גם `.new` שנשאר.
-  static Future<void> recoverInterrupted(String target) async {
+  ///
+  /// הגנה מפני תהליך אחר שכותב עכשיו: `.new` שנכתב ב-[liveWindow] האחרונות נחשב חי, ואז לא נוגעים בכלום
+  /// (לא מוחקים אותו וגם לא מחזירים `.old`, כי ייתכן שההחלפה באמצע). המופע היחיד של התוכנה כבר מונע
+  /// מצב כזה בין שני עותקים שלה, וזו שכבת הגנה נוספת.
+  static Future<void> recoverInterrupted(String target, {Duration liveWindow = const Duration(minutes: 2)}) async {
     try {
+      final nw = File('$target.new');
+      final hasNew = await nw.exists();
+      if (hasNew && DateTime.now().difference((await nw.stat()).modified) < liveWindow) return;
       final old = File('$target.old');
       if (!await File(target).exists() && await old.exists()) await old.rename(target);
-      final nw = File('$target.new');
-      if (await nw.exists()) await nw.delete();
+      if (hasNew) await nw.delete();
     } catch (_) {}
   }
 

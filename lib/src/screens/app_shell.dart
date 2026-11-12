@@ -71,6 +71,23 @@ class _AppShellState extends State<AppShell> {
     _lifecycle; // רישום ההאזנה
     UpdateController.cleanupLeftovers();
     _update.check();
+    _db.confirm = _confirmDialog;
+  }
+
+  Future<bool> _confirmDialog(String message) async {
+    if (!mounted) return false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('אישור'),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ביטול')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('המשך')),
+        ],
+      ),
+    );
+    return ok == true;
   }
 
   @override
@@ -96,10 +113,16 @@ class _AppShellState extends State<AppShell> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSt) {
           void submit() {
-            if (widget.controller.checkPassword(ctrl.text)) {
+            final waitBefore = widget.controller.unlockWait;
+            if (waitBefore > Duration.zero) {
+              setSt(() => err = 'יותר מדי ניסיונות. נסו שוב בעוד ${waitBefore.inSeconds + 1} שניות');
+            } else if (widget.controller.checkPassword(ctrl.text)) {
               Navigator.pop(ctx, true);
             } else {
-              setSt(() => err = 'הסיסמה שגויה');
+              final w = widget.controller.unlockWait;
+              setSt(() => err = w > Duration.zero
+                  ? 'הסיסמה שגויה. נסו שוב בעוד ${w.inSeconds + 1} שניות'
+                  : 'הסיסמה שגויה');
             }
           }
 

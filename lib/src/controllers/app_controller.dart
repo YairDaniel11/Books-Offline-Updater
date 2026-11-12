@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
@@ -11,6 +10,7 @@ import '../services/zip_extract.dart';
 import '../services/app_paths.dart';
 import '../services/copy_ledger.dart';
 import '../services/net_errors.dart';
+import '../services/password_hash.dart';
 import '../services/repo_service.dart';
 
 enum ItemStatus { none, ok, update }
@@ -68,9 +68,23 @@ class AppController extends ChangeNotifier {
 
   // ─── אתחול ────────────────────────────────────────────────────────
 
-  Future<void> init() async {
+  Future<void> init({bool carryOverSettings = false}) async {
     dataDir = await AppPaths.dataDir();
-    await _loadSettings();
+    final before = (ignoreShas, themeMode, startScreen, lockHash);
+    final found = await _loadSettings();
+    if (carryOverSettings) {
+      // מעבר לתיקיית נתונים אחרת: לא מאבדים בשקט את ההגדרות, ובפרט את הנעילה.
+      if (!found) {
+        ignoreShas = before.$1;
+        themeMode = before.$2;
+        startScreen = before.$3;
+        lockHash = before.$4;
+        await _saveSettings();
+      } else if (before.$4 != null && lockHash != before.$4) {
+        lockHash = before.$4;
+        await _saveSettings();
+      }
+    }
     final path = p.join(dataDir, pakFileName);
     try {
       final exists = await File(path).exists();
@@ -120,7 +134,8 @@ class AppController extends ChangeNotifier {
 
   File get _settingsFile => File(p.join(dataDir, 'settings.json'));
 
-  Future<void> _loadSettings() async {
+  /// `false` כשאין קובץ הגדרות תקין בתיקייה (ואז הערכים בזיכרון לא משתנים).
+  Future<bool> _loadSettings() async {
     try {
       final j = jsonDecode(await _settingsFile.readAsString()) as Map<String, dynamic>;
       ignoreShas = j['ignoreShas'] == true;
@@ -132,7 +147,10 @@ class AppController extends ChangeNotifier {
       startScreen = StartScreen.values.where((e) => e.name == j['startScreen']).firstOrNull ?? StartScreen.home;
       final lh = j['lockHash'];
       lockHash = lh is String && lh.isNotEmpty ? lh : null;
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _saveSettings() async {
@@ -166,17 +184,36 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  static String _hashPassword(String password) =>
-      sha256.convert(utf8.encode('books-offline-lock:$password')).toString();
+  final AttemptThrottle _unlockThrottle = AttemptThrottle();
 
   /// [password] = null מסיר את הנעילה.
   void setLockPassword(String? password) {
-    lockHash = password == null || password.isEmpty ? null : _hashPassword(password);
+    lockHash = password == null || password.isEmpty ? null : PasswordHash.create(password);
+    _unlockThrottle.recordSuccess();
     _saveSettings();
     notifyListeners();
   }
 
-  bool checkPassword(String password) => lockHash != null && _hashPassword(password) == lockHash;
+  /// כמה זמן צריך להמתין לפני ניסיון נוסף (אפס = אפשר לנסות).
+  Duration get unlockWait => _unlockThrottle.remaining;
+
+  /// בודק סיסמה עם האטה אחרי ניסיונות שגויים. ניסיון בזמן המתנה נדחה בלי בדיקה.
+  /// גיבוב ישן (בלי מלח) משודרג בשקט לגיבוב חדש אחרי פתיחה מוצלחת.
+  bool checkPassword(String password) {
+    final stored = lockHash;
+    if (stored == null) return false;
+    if (_unlockThrottle.blocked) return false;
+    if (!PasswordHash.verify(password, stored)) {
+      _unlockThrottle.recordFailure();
+      return false;
+    }
+    _unlockThrottle.recordSuccess();
+    if (PasswordHash.isLegacy(stored)) {
+      lockHash = PasswordHash.create(password);
+      _saveSettings();
+    }
+    return true;
+  }
 
   Future<void> changeDataDir(String? dir) async {
     if (busy) return;
@@ -187,7 +224,7 @@ class AppController extends ChangeNotifier {
     singleFiles = [];
     hashes = {};
     await AppPaths.setDataDirOverride(dir);
-    await init();
+    await init(carryOverSettings: true);
   }
 
   // ─── רשת ──────────────────────────────────────────────────────────
