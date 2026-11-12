@@ -304,7 +304,8 @@ Future<String> sha256File(
   final sub = port.listen((m) {
     if (m is (int, int)) onProgress?.call(m.$1, m.$2);
   });
-  final flag = malloc.allocate<Uint8>(1)..value = 0;
+  // ביטול שכבר התבקש נקלט מיד: חישוב מהיר מסתיים לפני שהסקר הראשון רץ.
+  final flag = malloc.allocate<Uint8>(1)..value = (isCancelled?.call() ?? false) ? 1 : 0;
   final poll = Timer.periodic(const Duration(milliseconds: 100), (_) {
     if (isCancelled?.call() ?? false) flag.value = 1;
   });
