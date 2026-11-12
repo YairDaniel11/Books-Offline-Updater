@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import '../services/repo_service.dart' show DownloadCancelled, githubRepo;
+import '../services/native_sha256.dart';
 import '../services/net_errors.dart';
 import 'db_manifest.dart';
 import 'zstd_stream.dart';
@@ -185,16 +186,7 @@ class DbService {
     void Function(int done, int total)? onProgress,
     bool Function()? isCancelled,
   }) async {
-    final f = File(path);
-    final total = await f.length();
-    var done = 0;
-    final stream = f.openRead().map((c) {
-      if (isCancelled?.call() ?? false) throw DownloadCancelled();
-      done += c.length;
-      onProgress?.call(done, total);
-      return c;
-    });
-    return (await sha256.bind(stream).first).toString();
+    return sha256File(path, onProgress: onProgress, isCancelled: isCancelled);
   }
 
   /// מוריד חלק לתיקיית המראה: ממשיך מהמקום שנעצר, מאמת sha256 וממיר שם רק אחרי אימות מלא.
