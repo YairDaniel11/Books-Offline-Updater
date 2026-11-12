@@ -415,10 +415,27 @@ class DbService {
         rethrow;
       }
       if (hadOld) await old.delete();
+      await deleteStaleSidecars(target);
     } finally {
       final t = File(tmpPath);
       if (await t.exists()) await t.delete();
     }
+  }
+
+  /// אחרי החלפת המסד מוחקים את קובצי העזר הישנים של SQLite שלידו (`-wal`, `-shm`, `-journal`):
+  /// אחרת SQLite עלול להחיל אותם על המסד החדש. נקרא רק אחרי החלפה שהצליחה (כלומר הקובץ לא היה נעול).
+  static Future<List<String>> deleteStaleSidecars(String dbPath) async {
+    final deleted = <String>[];
+    for (final suffix in const ['-wal', '-shm', '-journal']) {
+      final f = File('$dbPath$suffix');
+      try {
+        if (await f.exists()) {
+          await f.delete();
+          deleted.add(f.path);
+        }
+      } catch (_) {}
+    }
+    return deleted;
   }
 
   /// התאוששות מהפסקה (קריסה, כיבוי) בין "יעד ← .old" ל-".new ← יעד" בהחלפת המסד:
