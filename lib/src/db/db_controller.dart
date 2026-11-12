@@ -204,6 +204,14 @@ class DbController extends ChangeNotifier {
     }
   }
 
+  void _notifyThrottled() {
+    final now = DateTime.now();
+    if (now.difference(_lastNotify).inMilliseconds > 120) {
+      _lastNotify = now;
+      notifyListeners();
+    }
+  }
+
   // ─── רשת ──────────────────────────────────────────────────────────
 
   Future<void> checkRemote() async {
@@ -330,11 +338,49 @@ class DbController extends ChangeNotifier {
     return locked ? 'אוצריא פתוחה כנראה. סגרו את אוצריא ונסו שוב.\n($t)' : 'העדכון נכשל: $t';
   }
 
-  /// מזהה את גרסת המסד שביעד (חישוב SHA-256 על הקובץ).
-  Future<void> inspectTarget() async {
-    local = null;
-    localMirror = null;
-    if (targetDb.isEmpty || !await File(targetDb).exists()) {
+  /// התקדמות חישוב ה-SHA-256 של המסד (0..1) בזמן זיהוי הגרסה; null כשלא מחשבים.
+  double? inspectProgress;
+
+  Future<void>? _inspectRun;
+  bool _inspectAgain = false;
+
+  /// (נתיב, גודל, זמן שינוי) של הקובץ שעבורו `local`/`localMirror` תקפים כרגע.
+  String? _inspectedKey;
+
+  /// מזהה את גרסת המסד שביעד (חישוב SHA-256 על הקובץ). קריאה בזמן שזיהוי כבר רץ משתמשת בו
+  /// (ורצה שוב רק על ה-sha השמור, אם בינתיים הגיע מניפסט חדש).
+  Future<void> inspectTarget() {
+    final run = _inspectRun;
+    if (run != null) {
+      _inspectAgain = true;
+      return run;
+    }
+    final f = () async {
+      do {
+        _inspectAgain = false;
+        await _inspectOnce();
+      } while (_inspectAgain);
+    }();
+    return _inspectRun = f.whenComplete(() => _inspectRun = null);
+  }
+
+  Future<void> _inspectOnce() async {
+    FileStat? st;
+    try {
+      if (targetDb.isNotEmpty) {
+        st = await File(targetDb).stat();
+        if (st.type == FileSystemEntityType.notFound) st = null;
+      }
+    } catch (_) {}
+    final key = st == null ? null : '$targetDb|${st.size}|${st.modified.millisecondsSinceEpoch}';
+    // אותו קובץ כמו בזיהוי הקודם: ממשיכים להציג את התוצאה הקודמת בזמן הערכה מחדש מול מניפסט חדש.
+    final keep = key != null && key == _inspectedKey && local != null;
+    if (!keep) {
+      local = null;
+      localMirror = null;
+      _inspectedKey = null;
+    }
+    if (st == null) {
       notifyListeners();
       return;
     }
@@ -344,30 +390,43 @@ class DbController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    inspecting = true;
-    notifyListeners();
+    if (!keep) {
+      inspecting = true;
+      inspectProgress = null;
+      notifyListeners();
+    }
     try {
-      String? sha = await _cachedSha(targetDb);
-      Future<LocalDbInfo> inspect(DbManifest m, StepsManifest? steps) async {
-        final info = await _service.inspectLocalDb(
-          m,
-          targetDb,
-          knownSha: sha,
-          steps: steps,
-          chainIsWorthIt: (c) => _worthIt(c, m),
-        );
-        sha = info.sha256;
-        return info;
+      var sha = await _cachedSha(targetDb);
+      if (sha == null) {
+        inspecting = true;
+        inspectProgress = 0;
+        notifyListeners();
+        sha = await DbService.sha256OfFile(targetDb, onProgress: (done, total) {
+          inspectProgress = total == 0 ? 1.0 : done / total;
+          _notifyThrottled();
+        });
+        // נשמר מיד, כדי שהפעלה הבאה (או קריאה נוספת) לא תחשב שוב.
+        await _rememberSha(targetDb, sha);
       }
+      Future<LocalDbInfo> inspect(DbManifest m, StepsManifest? steps) => _service.inspectLocalDb(
+            m,
+            targetDb,
+            knownSha: sha,
+            steps: steps,
+            chainIsWorthIt: (c) => _worthIt(c, m),
+          );
 
-      if (mm != null) localMirror = await inspect(mm, mirrorSteps?.manifest);
+      final newMirror = mm != null ? await inspect(mm, mirrorSteps?.manifest) : null;
       // "יש עדכון" נקבע לפי הרשת כשיש חיבור, ולא לפי מה שנמצא בתיקיית המראה.
-      local = rm != null ? await inspect(rm, remoteSteps?.manifest) : localMirror;
-      await _rememberSha(targetDb, sha!);
+      final newLocal = rm != null ? await inspect(rm, remoteSteps?.manifest) : newMirror;
+      localMirror = newMirror;
+      local = newLocal;
+      _inspectedKey = key;
     } catch (e) {
       _msg('לא ניתן לקרוא את הקובץ: $e', error: true);
     }
     inspecting = false;
+    inspectProgress = null;
     notifyListeners();
   }
 

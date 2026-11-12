@@ -3,10 +3,10 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
 
-import 'package:crypto/crypto.dart';
 import 'package:ffi/ffi.dart';
 import 'package:zstandard_native/zstandard_native_bindings.dart';
 
+import '../services/native_sha256.dart';
 import 'mapped_file.dart';
 
 class ZstdException implements Exception {
@@ -44,6 +44,7 @@ Future<ZstdResult> zstdDecompressFiles(
   });
   // בית אחד בזיכרון נייטיבי: הדבר היחיד ששני ה-isolates יכולים לחלוק.
   final flag = malloc.allocate<Uint8>(1)..value = 0;
+  if (isCancelled?.call() ?? false) flag.value = 1;
   final poll = Timer.periodic(const Duration(milliseconds: 200), (_) {
     if (isCancelled?.call() ?? false) flag.value = 1;
   });
@@ -84,14 +85,6 @@ DynamicLibrary _openLibrary() {
     if (Platform.isLinux) return DynamicLibrary.open('libzstandard_linux.so');
   } catch (_) {}
   throw ZstdException('ספריית zstd אינה זמינה בפלטפורמה הזו');
-}
-
-class _DigestSink implements Sink<Digest> {
-  Digest? value;
-  @override
-  void add(Digest data) => value = data;
-  @override
-  void close() {}
 }
 
 typedef _RefPrefixC = IntPtr Function(Pointer<Void>, Pointer<Void>, IntPtr);
@@ -135,8 +128,7 @@ const _paramStableOutBuffer = 1001;
   MappedFile? mappedPrefix;
   MappedFile? mappedOut;
   RandomAccessFile? dest;
-  final digest = _DigestSink();
-  final hasher = sha256.startChunkedConversion(digest);
+  final hasher = Sha256Hasher();
   var hasherClosed = false;
   try {
     var total = 0;
@@ -233,7 +225,7 @@ const _paramStableOutBuffer = 1001;
             final produced = mappedOut != null ? 0 : outBuf.ref.pos;
             if (produced > 0) {
               dest!.writeFromSync(outView, 0, produced);
-              hasher.addSlice(outView, 0, produced, false);
+              hasher.addPointer(outPtr, produced);
               outSize += produced;
             }
           }
@@ -254,18 +246,18 @@ const _paramStableOutBuffer = 1001;
       for (var off = 0; off < outSize; off += chunk) {
         if (cancelFlag.value != 0) throw ZstdException('הפעולה בוטלה');
         final n = outSize - off < chunk ? outSize - off : chunk;
-        hasher.addSlice((mappedOut.pointer + off).asTypedList(n), 0, n, false);
+        hasher.addPointer(mappedOut.pointer + off, n);
       }
       mappedOut.close();
       mappedOut = null;
     } else {
       dest!.flushSync();
     }
-    hasher.close();
+    final shaHex = hasher.close();
     hasherClosed = true;
-    return (outSize, digest.value.toString());
+    return (outSize, shaHex);
   } finally {
-    if (!hasherClosed) hasher.close();
+    if (!hasherClosed) hasher.dispose();
     dest?.closeSync();
     mappedOut?.close();
     mappedPrefix?.close();

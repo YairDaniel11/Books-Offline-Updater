@@ -186,6 +186,12 @@ class _Hero extends StatelessWidget {
             ExcludeSemantics(
               child: Text(body, style: theme.textTheme.titleMedium?.copyWith(color: fg, fontWeight: FontWeight.w400)),
             ),
+            if (kind == HeroKind.checking && db.inspecting && db.inspectProgress != null) ...[
+              const SizedBox(height: AppTokens.spaceMD),
+              LinearProgressIndicator(value: db.inspectProgress, minHeight: 8),
+              const SizedBox(height: AppTokens.spaceSM),
+              Text('בפעם הראשונה זה לוקח קצת. בפעמים הבאות זה מיידי.', style: TextStyle(color: fg)),
+            ],
             if (actionLabel.isNotEmpty) ...[
               const SizedBox(height: AppTokens.spaceLG),
               SizedBox(
