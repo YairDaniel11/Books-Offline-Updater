@@ -169,9 +169,13 @@ class DbController extends ChangeNotifier {
     } catch (_) {}
   }
 
-  void _msg(String text, {bool error = false}) {
+  /// ההודעה הנוכחית מסיימת הכנה/העתקה למחשב השני (כדי להציג "עכשיו מעבירים את התוכנה...").
+  bool messageIsTransferDone = false;
+
+  void _msg(String text, {bool error = false, bool transferDone = false}) {
     message = text;
     messageIsError = error;
+    messageIsTransferDone = transferDone && !error;
     notifyListeners();
   }
 
@@ -182,6 +186,7 @@ class DbController extends ChangeNotifier {
 
   void setFromVersion(int? v) {
     fromVersion = v;
+    detectedCurrentPath = null;
     notifyListeners();
   }
 
@@ -430,11 +435,62 @@ class DbController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// הקובץ שנבחר בהכנה למחשב אחר וזוהה כגרסה העדכנית; `null` כשלא נבחר או שאינו עדכני.
+  String? detectedCurrentPath;
+
+  /// איזה קובץ מסד עדכני אפשר להעתיק ישירות (בלי הורדה), או `null`: אז ממשיכים בהורדה הרגילה.
+  /// [fromLocal]: המסד של המחשב הזה (אם הוא העדכני), [fromDetected]: העותק שנבחר וזוהה כעדכני.
+  String? latestDbToCopy({required bool fromLocal, required bool fromDetected}) {
+    if (fromLocal && local?.state == LocalDbState.current && targetDb.isNotEmpty && (remote ?? mirror) != null) {
+      try {
+        if (File(targetDb).existsSync()) return targetDb;
+      } catch (_) {}
+    }
+    final d = detectedCurrentPath;
+    if (fromDetected && d != null && remote != null) {
+      try {
+        if (File(d).existsSync()) return d;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// מעתיק את קובץ המסד העדכני [src] לתיקייה שנבחרה (למשל דיסק און קי), יחד עם הקבצים החתומים שההתקנה במחשב השני צריכה.
+  Future<void> copyLatestDbTo(String folder, String src) async {
+    final r = remote ?? mirror;
+    if (r == null || busy) return;
+    final dest = p.basename(folder) == dbMirrorDirName ? folder : p.join(folder, dbMirrorDirName);
+    message = null;
+    _cancel = false;
+    activity = DbActivity('מעתיק את המסד לדיסק און קי');
+    notifyListeners();
+    try {
+      final free = await freeDiskSpace(p.join(dest, 'x'));
+      var needed = r.manifest.full.size + 64 * 1024 * 1024;
+      final existing = File(p.join(dest, DbService.rawDbFileName(r.manifest.full)));
+      if (existing.existsSync() && existing.lengthSync() == r.manifest.full.size) needed = 64 * 1024 * 1024;
+      if (free != null && free < needed) {
+        _msg('אין מספיק מקום פנוי בדיסק און קי. דרושים כ-${formatBytes(needed)}, ופנויים ${formatBytes(free)}. '
+            'פנו מקום או בחרו כונן אחר.', error: true);
+      } else {
+        await _service.copyRawDb(r, src, dest, onProgress: _progress, isCancelled: () => _cancel);
+        _msg('הושלם. המסד (גרסה ${r.manifest.version}) הועתק אל: $dest', transferDone: true);
+      }
+    } on DownloadCancelled {
+      _msg('ההעתקה נעצרה. לא נשאר קובץ חלקי.');
+    } catch (e) {
+      _msg(DbService.friendlyCopyError(e), error: true);
+    }
+    activity = null;
+    notifyListeners();
+  }
+
   /// זיהוי גרסה לפי קובץ מסד (לבחירת קובץ העדכון להורדה), בלי לשנות את יעד ההתקנה.
   Future<void> detectVersionFrom(String path) async {
     final m = remote?.manifest;
     if (m == null || busy) return;
     inspecting = true;
+    detectedCurrentPath = null;
     notifyListeners();
     try {
       final info = await _service.inspectLocalDb(
@@ -446,6 +502,7 @@ class DbController extends ChangeNotifier {
       switch (info.state) {
         case LocalDbState.current:
           fromVersion = null;
+          detectedCurrentPath = path;
           _msg('המסד שבחרתם כבר בגרסה העדכנית (${m.version}).');
         case LocalDbState.hasDelta:
           fromVersion = info.version;
@@ -524,7 +581,7 @@ class DbController extends ChangeNotifier {
     try {
       await _service.download(r, list, mirrorDir,
           onProgress: _progress, isCancelled: () => _cancel, steps: remoteSteps);
-      _msg('ההורדה הסתיימה (גרסה ${r.manifest.version}). הקבצים בתיקייה: $mirrorDir');
+      _msg('ההורדה הסתיימה (גרסה ${r.manifest.version}). הקבצים בתיקייה: $mirrorDir', transferDone: true);
     } on DownloadCancelled {
       _msg('ההורדה נעצרה. ניתן להמשיך אותה בהמשך מאותה נקודה.');
     } catch (e) {
@@ -673,6 +730,7 @@ class DbController extends ChangeNotifier {
   /// מוחק את זיהוי הגרסה של המחשב היעד (להורדת המסד המלא).
   void clearTransferVersion() {
     fromVersion = null;
+    detectedCurrentPath = null;
     notifyListeners();
   }
 
@@ -683,7 +741,7 @@ class DbController extends ChangeNotifier {
     if (m == null) return null;
     if (targetDb.isEmpty) return null;
     final exists = File(targetDb).existsSync();
-    final fullOk = DbService.isComplete(m.full, mirrorDir);
+    final fullOk = DbService.fullAvailable(m.full, mirrorDir);
     if (!exists) {
       return fullOk
           ? InstallPlan(InstallAction.full, 'הקובץ אינו קיים: יותקן המסד המלא (גרסה ${m.version}).', artifact: m.full)
