@@ -1,3 +1,5 @@
+import 'dart:ui' show AppExitResponse;
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
@@ -39,15 +41,41 @@ class _AppShellState extends State<AppShell> {
   bool _locked = false;
   late final UpdateController _update = UpdateController(beforeRestart: () async => widget.controller.pak?.close());
 
+  /// בקשת סגירת החלון (כפתור X, Alt+F4, יציאה במק): כשיש פעולה בעיצומה שואלים לפני שסוגרים.
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onExitRequested: _confirmExit);
+
+  /// האם יש הורדה, עדכון או חילוץ שרצים כרגע.
+  bool get _busyNow => widget.controller.busy || _db.busy;
+
+  Future<AppExitResponse> _confirmExit() async {
+    if (!_busyNow || !mounted) return AppExitResponse.exit;
+    final close = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('יש פעולה בעיצומה'),
+        content: const Text('יש פעולה בעיצומה. לסגור בכל זאת?'),
+        actions: [
+          // ברירת המחדל (מוקד ראשוני): להישאר.
+          FilledButton(autofocus: true, onPressed: () => Navigator.pop(ctx, false), child: const Text('להישאר')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('לסגור בכל זאת')),
+        ],
+      ),
+    );
+    return close == true ? AppExitResponse.exit : AppExitResponse.cancel;
+  }
+
   @override
   void initState() {
     super.initState();
+    _lifecycle; // רישום ההאזנה
     UpdateController.cleanupLeftovers();
     _update.check();
   }
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _update.dispose();
     _db.dispose();
     super.dispose();
