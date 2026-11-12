@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import '../controllers/app_controller.dart';
 import '../services/app_paths.dart';
+import '../services/net_errors.dart';
 import '../services/otzaria_locator.dart';
 import '../services/repo_service.dart' show DownloadCancelled;
 import 'db_manifest.dart';
@@ -216,7 +217,7 @@ class DbController extends ChangeNotifier {
       if (fromVersion != null && !versionOptions.any((o) => o.version == fromVersion)) fromVersion = null;
     } catch (e) {
       remote = null;
-      remoteError = e is DbException ? e.message : 'אין חיבור לרשת';
+      remoteError = e is DbException ? e.message : friendlyNetError(e);
     }
     checking = false;
     notifyListeners();
@@ -435,7 +436,7 @@ class DbController extends ChangeNotifier {
     } on DownloadCancelled {
       _msg('ההורדה נעצרה. ניתן להמשיך אותה בהמשך מאותה נקודה.');
     } catch (e) {
-      _msg('ההורדה נכשלה: $e', error: true);
+      _msg('ההורדה נכשלה: ${friendlyNetError(e)}', error: true);
     }
     activity = null;
     await refreshMirror();

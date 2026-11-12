@@ -5,6 +5,8 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 
+import 'net_errors.dart';
+
 const githubRepo = 'YairDaniel11/Otzarya-Unofficial-Books';
 const _rawBase = 'https://raw.githubusercontent.com/$githubRepo/main';
 const _apiBase = 'https://api.github.com/repos/$githubRepo/contents';
@@ -133,10 +135,7 @@ class RepoService {
   Future<List<int>> _getBytes(String url, {Duration timeout = const Duration(seconds: 25)}) async {
     final req = await _client.getUrl(Uri.parse(url));
     final res = await req.close().timeout(timeout);
-    if (res.statusCode != 200) {
-      await res.drain<void>();
-      throw RepoException('שגיאת שרת ${res.statusCode}');
-    }
+    await ensureOk(res);
     final b = BytesBuilder();
     await for (final c in res.timeout(timeout)) {
       b.add(c);
@@ -160,7 +159,7 @@ class RepoService {
     } catch (e) {
       last = e;
     }
-    throw RepoException('לא ניתן לטעון את $file${last != null ? ' ($last)' : ''}');
+    throw RepoException(last != null ? friendlyNetError(last) : 'לא ניתן לטעון את $file');
   }
 
   Future<RepoSnapshot> fetchSnapshot() async {
@@ -209,14 +208,10 @@ class RepoService {
         final req = await _client.getUrl(Uri.parse('$_latestDl/${item.zip}'));
         if (have > 0) req.headers.set(HttpHeaders.rangeHeader, 'bytes=$have-');
         final res = await req.close().timeout(const Duration(seconds: 30));
-        if (res.statusCode != 200 && res.statusCode != 206) {
-          await res.drain<void>();
-          if (res.statusCode == 416) {
-            // כבר הורד במלואו — נבדוק hash למטה.
-          } else {
-            throw RepoException('שגיאת שרת ${res.statusCode}');
-          }
+        if (res.statusCode == 416) {
+          await res.drain<void>(); // כבר הורד במלואו — נבדוק hash למטה.
         } else {
+          await ensureOk(res, ok: const {200, 206});
           if (res.statusCode == 200) have = 0; // השרת התעלם מ-Range
           final total = res.contentLength >= 0 ? res.contentLength + have : null;
           final sink = file.openWrite(mode: have > 0 ? FileMode.append : FileMode.write);
@@ -247,7 +242,7 @@ class RepoService {
         await Future<void>.delayed(Duration(seconds: 2 * (attempt + 1)));
       }
     }
-    throw RepoException('ההורדה של "${item.name}" נכשלה: $lastError');
+    throw RepoException('ההורדה של "${item.name}" נכשלה. ${friendlyNetError(lastError!)}');
   }
 
   void close() => _client.close(force: true);

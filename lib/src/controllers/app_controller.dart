@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import '../pak/pak_file.dart';
 import '../services/zip_extract.dart';
 import '../services/app_paths.dart';
+import '../services/net_errors.dart';
 import '../services/repo_service.dart';
 
 enum ItemStatus { none, ok, update }
@@ -207,7 +208,7 @@ class AppController extends ChangeNotifier {
       }
     } catch (e) {
       online = false;
-      onlineError = e is RepoException ? e.message : 'אין חיבור לרשת';
+      onlineError = e is RepoException ? e.message : friendlyNetError(e);
     }
     checkingOnline = false;
     notifyListeners();
@@ -283,7 +284,7 @@ class AppController extends ChangeNotifier {
     } on DownloadCancelled {
       _msg('הפעולה נעצרה.');
     } catch (e) {
-      _msg('ההורדה נכשלה: $e', error: true);
+      _msg('ההורדה נכשלה: ${friendlyNetError(e)}', error: true);
     } finally {
       try {
         await File(zipPath).delete();
@@ -473,7 +474,7 @@ class AppController extends ChangeNotifier {
       await _commit();
       await _maybeCompact();
     } catch (e) {
-      failed.add('$e');
+      failed.add(friendlyNetError(e));
     } finally {
       final cancelled = activity?.cancelled ?? false;
       activity = null;
@@ -577,7 +578,7 @@ class AppController extends ChangeNotifier {
       await pak!.putBytes(f.path, Uint8List.fromList(bytes));
       hashes[f.path] = f.hash;
     } catch (e) {
-      failed.add('דורות.csv: $e');
+      failed.add('דורות.csv: ${friendlyNetError(e)}');
     }
   }
 
@@ -695,7 +696,7 @@ class AppController extends ChangeNotifier {
       }
       if (!activity!.cancelled) deleted = await _cleanupDestination(destDir, prefixes);
     } catch (e) {
-      failed.add('$e');
+      failed.add(friendlyNetError(e));
     } finally {
       final cancelled = activity?.cancelled ?? false;
       activity = null;
