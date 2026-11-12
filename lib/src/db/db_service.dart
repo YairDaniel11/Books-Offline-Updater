@@ -425,6 +425,35 @@ class DbService {
     }
   }
 
+  static const _sqliteHeader = 'SQLite format 3\u0000';
+
+  /// האם הקובץ נראה כמסד SQLite: כותרת "SQLite format 3\0". קובץ שחסר או ריק נחשב תקין (ייווצר מסד חדש).
+  static Future<bool> looksLikeSqlite(String path) async {
+    final f = File(path);
+    if (!await f.exists()) return true;
+    final len = await f.length();
+    if (len == 0) return true;
+    if (len < _sqliteHeader.length) return false;
+    RandomAccessFile? raf;
+    try {
+      raf = await f.open();
+      final head = await raf.read(_sqliteHeader.length);
+      return String.fromCharCodes(head) == _sqliteHeader;
+    } finally {
+      await raf?.close();
+    }
+  }
+
+  /// כמה מקום פנוי דרוש בכונן של היעד: החלקים שעוד צריך להוריד, ואת התוצאה (`.new`) לצד הקובץ הקיים.
+  /// בשרשרת צעדים הצעדים מוחלים בזה אחר זה, ולכן נספר הגדול שבהם. מרווח קטן לתקורה.
+  static int requiredBytes(List<DbArtifact> artifacts, {int bytesToDownload = 0}) {
+    var biggest = 0;
+    for (final a in artifacts) {
+      if (a.size > biggest) biggest = a.size;
+    }
+    return bytesToDownload + biggest + 64 * 1024 * 1024;
+  }
+
   /// התאוששות מהפסקה (קריסה, כיבוי) בין "יעד ← .old" ל-".new ← יעד" בהחלפת המסד:
   /// אם אין קובץ יעד אבל יש `.old`, מחזירים אותו. מנקים גם `.new` שנשאר.
   static Future<void> recoverInterrupted(String target) async {

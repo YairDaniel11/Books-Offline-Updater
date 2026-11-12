@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import '../controllers/app_controller.dart';
 import '../services/app_paths.dart';
+import '../services/disk_space.dart';
 import '../services/otzaria_locator.dart';
 import '../services/repo_service.dart' show DownloadCancelled;
 import 'db_manifest.dart';
@@ -244,8 +245,40 @@ class DbController extends ChangeNotifier {
     await refreshMirror();
   }
 
+  /// אישור מהמשתמש (דיאלוג). מוגדר על ידי המסך; כשחסר, ממשיכים בלי לשאול (בדיקות).
+  Future<bool> Function(String message)? confirm;
+
+  static const unknownDbConfirmText = 'המסד במחשב הזה לא מזוהה ויוחלף במסד המלא. להמשיך?';
+
+  /// בודק שיש מקום פנוי בכונן של המסד ליעד. נכשל בבדיקה עצמה: ממשיכים (מחזיר true).
+  Future<bool> _hasRoomFor(int needed) async {
+    final free = await freeDiskSpace(targetDb);
+    if (free == null || free >= needed) return true;
+    _msg('אין מספיק מקום פנוי בכונן של המסד. דרושים כ-${formatBytes(needed)}, ופנויים ${formatBytes(free)}. '
+        'פנו מקום ונסו שוב.', error: true);
+    return false;
+  }
+
+  /// המסד היעד חייב להיראות כמסד SQLite (או להיות חסר/ריק), כדי לא לדרוס קובץ אחר.
+  Future<bool> _targetIsSqlite() async {
+    try {
+      if (await DbService.looksLikeSqlite(targetDb)) return true;
+    } catch (_) {
+      return true; // לא הצלחנו לקרוא: הזיהוי וההחלפה ייכשלו בעצמם אם יש בעיה
+    }
+    _msg('הקובץ שנבחר אינו מסד ספרים (אינו קובץ SQLite), ולכן לא יוחלף. בחרו קובץ אחר או תיקייה חדשה.', error: true);
+    return false;
+  }
+
   Future<void> setTarget(String path) async {
     if (busy) return;
+    try {
+      if (!await DbService.looksLikeSqlite(path)) {
+        _msg('הקובץ שנבחר אינו מסד ספרים (אינו קובץ SQLite), ולכן לא נבחר. בחרו את קובץ המסד של אוצריא או תיקייה חדשה.',
+            error: true);
+        return;
+      }
+    } catch (_) {}
     targetDb = path;
     await DbService.recoverInterrupted(path);
     local = null;
@@ -469,6 +502,7 @@ class DbController extends ChangeNotifier {
     final r = remote;
     if (r == null || busy || targetDb.isEmpty) return;
     if (await _blockedByOtzaria()) return;
+    if (!await _targetIsSqlite()) return;
     final m = r.manifest;
     message = null;
     _cancel = false;
@@ -496,6 +530,25 @@ class DbController extends ChangeNotifier {
           return;
         }
         if (info.updates != null) artifacts = info.updates!;
+        if (info.state == LocalDbState.unknown && confirm != null) {
+          if (!await confirm!(unknownDbConfirmText)) {
+            activity = null;
+            _msg('הפעולה בוטלה. המסד הקיים לא שונה.');
+            return;
+          }
+        }
+      }
+      var missing = 0;
+      for (final a in artifacts) {
+        for (final part in a.parts) {
+          final f = File(DbService.partPath(tmpDir, part));
+          if (!(f.existsSync() && f.lengthSync() == part.size)) missing += part.size;
+        }
+      }
+      if (!await _hasRoomFor(DbService.requiredBytes(artifacts, bytesToDownload: missing))) {
+        activity = null;
+        notifyListeners();
+        return;
       }
       artifactsCount = artifacts.length;
       final isDelta = artifacts.first.isDelta;
@@ -623,6 +676,16 @@ class DbController extends ChangeNotifier {
     final pl = plan;
     if (pl == null || !pl.canRun || busy) return;
     if (await _blockedByOtzaria()) return;
+    if (!await _targetIsSqlite()) return;
+    if (!await _hasRoomFor(DbService.requiredBytes(pl.all))) return;
+    if (pl.action == InstallAction.full &&
+        File(targetDb).existsSync() &&
+        localMirror?.state == LocalDbState.unknown &&
+        confirm != null &&
+        !await confirm!(unknownDbConfirmText)) {
+      _msg('הפעולה בוטלה. המסד הקיים לא שונה.');
+      return;
+    }
     message = null;
     _cancel = false;
     activity = DbActivity('מעתיק את הספרים');

@@ -44,6 +44,23 @@ class _AppShellState extends State<AppShell> {
     super.initState();
     UpdateController.cleanupLeftovers();
     _update.check();
+    _db.confirm = _confirmDialog;
+  }
+
+  Future<bool> _confirmDialog(String message) async {
+    if (!mounted) return false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('אישור'),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('ביטול')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('המשך')),
+        ],
+      ),
+    );
+    return ok == true;
   }
 
   @override
