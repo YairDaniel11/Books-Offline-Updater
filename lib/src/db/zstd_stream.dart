@@ -44,6 +44,7 @@ Future<ZstdResult> zstdDecompressFiles(
   });
   // בית אחד בזיכרון נייטיבי: הדבר היחיד ששני ה-isolates יכולים לחלוק.
   final flag = malloc.allocate<Uint8>(1)..value = 0;
+  if (isCancelled?.call() ?? false) flag.value = 1;
   final poll = Timer.periodic(const Duration(milliseconds: 200), (_) {
     if (isCancelled?.call() ?? false) flag.value = 1;
   });
