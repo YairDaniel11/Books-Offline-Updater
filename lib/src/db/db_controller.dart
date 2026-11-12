@@ -148,6 +148,7 @@ class DbController extends ChangeNotifier {
         await _save();
       }
     }
+    if (targetDb.isNotEmpty) await DbService.recoverInterrupted(targetDb);
     await refreshMirror();
     if (targetDb.isNotEmpty) await inspectTarget();
     notifyListeners();
@@ -246,6 +247,7 @@ class DbController extends ChangeNotifier {
   Future<void> setTarget(String path) async {
     if (busy) return;
     targetDb = path;
+    await DbService.recoverInterrupted(path);
     local = null;
     localMirror = null;
     await _save();
@@ -268,6 +270,9 @@ class DbController extends ChangeNotifier {
   /// מחזיר תוספת להודעת הסיום.
   Future<String> _ensureAttached() async {
     if (otzariaDbPath == targetDb) return '';
+    if (await OtzariaLocator.isRunning()) {
+      return '\nאוצריא נפתחה, ולכן המסד לא צורף אליה. סגרו אותה ולחצו שוב.';
+    }
     if (await OtzariaLocator.attach(targetDb)) {
       otzariaDbPath = targetDb;
       return ' הספרים יופיעו באוצריא בפתיחה הבאה.';
@@ -622,17 +627,30 @@ class DbController extends ChangeNotifier {
     _cancel = false;
     activity = DbActivity('מעתיק את הספרים');
     notifyListeners();
+    var applied = 0;
     try {
       for (final a in pl.all) {
+        if (applied > 0 && await OtzariaLocator.isRunning()) {
+          throw _ChainStopped('אוצריא נפתחה באמצע העדכון');
+        }
         await _service.install(a, mirrorDir, targetDb, onProgress: _progress, isCancelled: () => _cancel);
+        applied++;
       }
       final attached = await _ensureAttached();
       _msg('הספרים הועתקו בהצלחה (גרסה ${mirror!.manifest.version}).${attached.isEmpty ? ' אפשר לפתוח את אוצריא.' : attached}');
     } on DownloadCancelled {
-      _msg('הפעולה נעצרה. המסד הקיים לא שונה.');
+      _msg(_stoppedText(applied, total: pl.all.length));
+    } on _ChainStopped catch (e) {
+      _msg('${e.reason}. ${_stoppedText(applied, total: pl.all.length, always: true)} סגרו את אוצריא ולחצו שוב.', error: true);
     } catch (e) {
       final text = e.toString();
-      _msg(text.contains('הפעולה בוטלה') ? 'הפעולה נעצרה. המסד הקיים לא שונה.' : _failText(e), error: !text.contains('בוטלה'));
+      if (text.contains('הפעולה בוטלה')) {
+        _msg(_stoppedText(applied, total: pl.all.length));
+      } else if (applied > 0) {
+        _msg('${_failText(e)}\n${_stoppedText(applied, total: pl.all.length, always: true)}', error: true);
+      } else {
+        _msg(_failText(e), error: true);
+      }
     }
     activity = null;
     notifyListeners();

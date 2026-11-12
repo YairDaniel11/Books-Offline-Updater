@@ -157,4 +157,23 @@ void main() {
       expect(m.chainFromSha(h(40), h(40)), isEmpty);
     });
   });
+
+  test('התאוששות מהפסקה בהחלפת המסד: .old חוזר כשהיעד חסר', () async {
+    final d = Directory.systemTemp.createTempSync('rec');
+    try {
+      final target = p.join(d.path, 'x.db');
+      File('$target.old').writeAsStringSync('old');
+      File('$target.new').writeAsStringSync('partial');
+      await DbService.recoverInterrupted(target);
+      expect(File(target).readAsStringSync(), 'old');
+      expect(File('$target.old').existsSync(), isFalse);
+      expect(File('$target.new').existsSync(), isFalse);
+      // יעד קיים: לא נוגעים בו
+      File('$target.old').writeAsStringSync('older');
+      await DbService.recoverInterrupted(target);
+      expect(File(target).readAsStringSync(), 'old');
+    } finally {
+      d.deleteSync(recursive: true);
+    }
+  });
 }
