@@ -7,6 +7,8 @@ import 'package:crypto/crypto.dart';
 import 'package:ffi/ffi.dart';
 import 'package:zstandard_native/zstandard_native_bindings.dart';
 
+import 'mapped_file.dart';
+
 class ZstdException implements Exception {
   ZstdException(this.message);
   final String message;
@@ -94,6 +96,13 @@ class _DigestSink implements Sink<Digest> {
 
 typedef _RefPrefixC = IntPtr Function(Pointer<Void>, Pointer<Void>, IntPtr);
 typedef _RefPrefixD = int Function(Pointer<Void>, Pointer<Void>, int);
+typedef _SetParamC = IntPtr Function(Pointer<Void>, Int32, Int32);
+typedef _SetParamD = int Function(Pointer<Void>, int, int);
+
+/// ZSTD_d_stableOutBuffer (ZSTD_d_experimentalParam2): הפלט נכתב ישירות לחוצץ אחד קבוע שמכיל את כל
+/// התוצאה, ולכן המפענח אינו מקצה חלון (עד 2GB ב-windowLog 31).
+const _paramStableOutBuffer = 1001;
+
 
 (int, String) _decompress(
   List<String> sources,
@@ -123,6 +132,8 @@ typedef _RefPrefixD = int Function(Pointer<Void>, Pointer<Void>, int);
   final inBuf = malloc<ZSTD_inBuffer>();
   final outBuf = malloc<ZSTD_outBuffer>();
   Pointer<Uint8> prefix = nullptr;
+  MappedFile? mappedPrefix;
+  MappedFile? mappedOut;
   RandomAccessFile? dest;
   final digest = _DigestSink();
   final hasher = sha256.startChunkedConversion(digest);
@@ -138,34 +149,62 @@ typedef _RefPrefixD = int Function(Pointer<Void>, Pointer<Void>, int);
     zstd.ZSTD_DCtx_setParameter(dctx, ZSTD_dParameter.ZSTD_d_windowLogMax, _maxWindowLog);
 
     if (prefixPath != null) {
-      // ה-prefix חייב לשבת בזיכרון רציף לאורך כל הפענוח (כל המסד הישן). קוראים אותו במקטעים.
-      final f = File(prefixPath).openSync();
-      try {
-        final len = f.lengthSync();
-        if (len == 0) throw ZstdException('מסד הבסיס ריק');
-        prefix = malloc.allocate<Uint8>(len);
-        const chunk = 8 * 1024 * 1024;
-        var off = 0;
-        while (off < len) {
-          final n = len - off < chunk ? len - off : chunk;
-          final view = (prefix + off).asTypedList(n);
-          final got = f.readIntoSync(view, 0, n);
-          if (got <= 0) throw ZstdException('קריאת מסד הבסיס נכשלה');
-          off += got;
+      // מסד הבסיס ממופה לקריאה בלבד: הדפים נתמכים בקובץ ולא תופסים זיכרון מחויב. רק אם המיפוי נכשל
+      // טוענים אותו ל-RAM כבעבר.
+      mappedPrefix = MappedFile.openRead(prefixPath);
+      Pointer<Uint8> prefixPtr;
+      int len;
+      if (mappedPrefix != null) {
+        prefixPtr = mappedPrefix.pointer;
+        len = mappedPrefix.length;
+      } else {
+        final f = File(prefixPath).openSync();
+        try {
+          len = f.lengthSync();
+          if (len == 0) throw ZstdException('מסד הבסיס ריק');
+          prefix = malloc.allocate<Uint8>(len);
+          const chunk = 8 * 1024 * 1024;
+          var off = 0;
+          while (off < len) {
+            final n = len - off < chunk ? len - off : chunk;
+            final view = (prefix + off).asTypedList(n);
+            final got = f.readIntoSync(view, 0, n);
+            if (got <= 0) throw ZstdException('קריאת מסד הבסיס נכשלה');
+            off += got;
+          }
+        } finally {
+          f.closeSync();
         }
-        final ref = library.lookupFunction<_RefPrefixC, _RefPrefixD>('ZSTD_DCtx_refPrefix');
-        final rc = ref(dctx.cast(), prefix.cast(), len);
-        if (zstd.ZSTD_isError(rc) != 0) throw ZstdException('הצמדת מסד הבסיס נכשלה: ${err(rc)}');
-      } finally {
-        f.closeSync();
+        prefixPtr = prefix;
+      }
+      final ref = library.lookupFunction<_RefPrefixC, _RefPrefixD>('ZSTD_DCtx_refPrefix');
+      final rc = ref(dctx.cast(), prefixPtr.cast(), len);
+      if (zstd.ZSTD_isError(rc) != 0) throw ZstdException('הצמדת מסד הבסיס נכשלה: ${err(rc)}');
+
+      // גודל התוצאה מופיע בכותרת ה-frame. אם הוא ידוע, כותבים את הפלט ישירות לקובץ ממופה בלי חלון.
+      final expected = _frameContentSize(zstd, sources.first);
+      if (expected != null && expected > 0) {
+        mappedOut = MappedFile.createWrite(destPath, expected);
+        if (mappedOut != null) {
+          final setParam = library.lookupFunction<_SetParamC, _SetParamD>('ZSTD_DCtx_setParameter');
+          final sc = setParam(dctx.cast(), _paramStableOutBuffer, 1);
+          if (zstd.ZSTD_isError(sc) != 0) {
+            mappedOut.close();
+            mappedOut = null;
+          }
+        }
       }
     }
 
-    dest = File(destPath).openSync(mode: FileMode.write);
+    if (mappedOut == null) dest = File(destPath).openSync(mode: FileMode.write);
     final inView = inPtr.asTypedList(inCap);
     final outView = outPtr.asTypedList(outCap);
     inBuf.ref.src = inPtr.cast();
-    outBuf.ref.dst = outPtr.cast();
+    outBuf.ref.dst = mappedOut != null ? mappedOut.pointer.cast() : outPtr.cast();
+    if (mappedOut != null) {
+      outBuf.ref.size = mappedOut.length;
+      outBuf.ref.pos = 0;
+    }
 
     var last = 0;
     var any = false;
@@ -185,13 +224,15 @@ typedef _RefPrefixD = int Function(Pointer<Void>, Pointer<Void>, int);
           inBuf.ref.size = read;
           inBuf.ref.pos = 0;
           while (inBuf.ref.pos < inBuf.ref.size) {
-            outBuf.ref.size = outCap;
-            outBuf.ref.pos = 0;
+            if (mappedOut == null) {
+              outBuf.ref.size = outCap;
+              outBuf.ref.pos = 0;
+            }
             last = zstd.ZSTD_decompressStream(dctx, outBuf, inBuf);
             if (zstd.ZSTD_isError(last) != 0) throw ZstdException('פענוח zstd נכשל: ${err(last)}');
-            final produced = outBuf.ref.pos;
+            final produced = mappedOut != null ? 0 : outBuf.ref.pos;
             if (produced > 0) {
-              dest.writeFromSync(outView, 0, produced);
+              dest!.writeFromSync(outView, 0, produced);
               hasher.addSlice(outView, 0, produced, false);
               outSize += produced;
             }
@@ -205,18 +246,50 @@ typedef _RefPrefixD = int Function(Pointer<Void>, Pointer<Void>, int);
     if (!any) throw ZstdException('קובץ הקלט ריק');
     // 0 = ה-frame נסגר כהלכה; אחרת הקלט נגמר באמצע (קובץ קטוע).
     if (last != 0) throw ZstdException('הקובץ הדחוס קטוע');
-    dest.flushSync();
+    if (mappedOut != null) {
+      // הפלט כבר בקובץ הממופה: מוודאים שהתקבל בדיוק הגודל שהוצהר ומחשבים את ה-sha256 במקטעים.
+      if (outBuf.ref.pos != mappedOut.length) throw ZstdException('הקובץ הדחוס קטוע');
+      outSize = mappedOut.length;
+      const chunk = 8 * 1024 * 1024;
+      for (var off = 0; off < outSize; off += chunk) {
+        if (cancelFlag.value != 0) throw ZstdException('הפעולה בוטלה');
+        final n = outSize - off < chunk ? outSize - off : chunk;
+        hasher.addSlice((mappedOut.pointer + off).asTypedList(n), 0, n, false);
+      }
+      mappedOut.close();
+      mappedOut = null;
+    } else {
+      dest!.flushSync();
+    }
     hasher.close();
     hasherClosed = true;
     return (outSize, digest.value.toString());
   } finally {
     if (!hasherClosed) hasher.close();
     dest?.closeSync();
+    mappedOut?.close();
+    mappedPrefix?.close();
     if (prefix != nullptr) malloc.free(prefix);
     malloc.free(inBuf);
     malloc.free(outBuf);
     malloc.free(inPtr);
     malloc.free(outPtr);
     zstd.ZSTD_freeDCtx(dctx);
+  }
+}
+
+/// גודל התוכן המפוענח שרשום בכותרת ה-frame הראשון, או null אם אינו ידוע.
+int? _frameContentSize(ZstandardNativeBindings zstd, String path) {
+  final f = File(path).openSync();
+  final buf = malloc.allocate<Uint8>(32);
+  try {
+    final n = f.readIntoSync(buf.asTypedList(32), 0, 32);
+    if (n <= 0) return null;
+    final r = zstd.ZSTD_getFrameContentSize(buf.cast(), n);
+    // ZSTD_CONTENTSIZE_UNKNOWN = -1, ZSTD_CONTENTSIZE_ERROR = -2 (uint64 גדול כ-int חתום).
+    return r < 0 ? null : r;
+  } finally {
+    f.closeSync();
+    malloc.free(buf);
   }
 }
