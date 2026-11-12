@@ -41,6 +41,11 @@ class _PrepareScreenState extends State<PrepareScreen> {
     if (f?.path != null) await db.detectVersionFrom(f!.path!);
   }
 
+  Future<void> _copyToDrive(String src) async {
+    final dir = await FilePicker.getDirectoryPath(dialogTitle: 'בחירת הדיסק און קי (או תיקייה) להעתקת המסד');
+    if (dir != null) await db.copyLatestDbTo(dir, src);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -54,6 +59,7 @@ class _PrepareScreenState extends State<PrepareScreen> {
         final can = r != null && !db.busy && sel.isNotEmpty;
         final opts = db.versionOptions;
         final delta = sel.isNotEmpty && sel.first.isDelta;
+        final copySrc = db.latestDbToCopy(fromLocal: _source == _Source.none, fromDetected: _source == _Source.copy);
         return ListView(
           padding: const EdgeInsets.all(AppTokens.spaceMD),
           children: [
@@ -120,34 +126,52 @@ class _PrepareScreenState extends State<PrepareScreen> {
                       if (db.message != null) ...[
                         DbResultPanel(
                           db: db,
-                          nextStep: 'עכשיו מעבירים את התוכנה יחד עם התיקייה "$dbMirrorDirName" (למשל בדיסק און קי) למחשב השני.',
+                          nextStep: !db.messageIsTransferDone ? null : 'עכשיו מעבירים את התוכנה יחד עם התיקייה "$dbMirrorDirName" (למשל בדיסק און קי) למחשב השני.',
                         ),
                         const SizedBox(height: AppTokens.spaceMD),
                       ],
-                      Text(
-                        r == null
-                            ? 'ההכנה זמינה רק עם חיבור לרשת.'
-                            : delta
-                                ? 'יורד: עדכון מגרסה ${db.fromVersion} לגרסה ${r.version}.'
-                                : 'יורד: מסד הספרים המלא (גרסה ${r.version}).',
-                        style: theme.textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: AppTokens.spaceSM),
-                      SizedBox(
-                        height: 56,
-                        child: FilledButton.icon(
-                          onPressed: can && !ready ? db.download : null,
-                          icon: Icon(ready ? Icons.check : FluentIcons.arrow_download_24_regular),
-                          label: Text(
-                            ready ? 'הקבצים מוכנים' : 'הורדה והכנת הקבצים (${DbController.formatBytes(bytes)})',
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                      if (copySrc != null) ...[
+                        Text(
+                          'המסד כבר בגרסה העדכנית (${(db.remote ?? db.mirror)!.manifest.version}), ולכן אין צורך להוריד אותו. '
+                          'אפשר להעתיק אותו ישירות לדיסק און קי.',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: AppTokens.spaceSM),
+                        SizedBox(
+                          height: 56,
+                          child: FilledButton.icon(
+                            onPressed: db.busy || db.inspecting ? null : () => _copyToDrive(copySrc),
+                            icon: const Icon(FluentIcons.save_24_regular),
+                            label: const Text('העתקת המסד לדיסק און קי',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                           ),
                         ),
-                      ),
-                      if (ready && db.message == null) ...[
+                      ] else ...[
+                        Text(
+                          r == null
+                              ? 'ההכנה זמינה רק עם חיבור לרשת.'
+                              : delta
+                                  ? 'יורד: עדכון מגרסה ${db.fromVersion} לגרסה ${r.version}.'
+                                  : 'יורד: מסד הספרים המלא (גרסה ${r.version}).',
+                          style: theme.textTheme.titleMedium,
+                        ),
                         const SizedBox(height: AppTokens.spaceSM),
-                        Text('הקבצים מוכנים. העבירו את התוכנה יחד עם התיקייה "$dbMirrorDirName" למחשב השני.',
-                            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                        SizedBox(
+                          height: 56,
+                          child: FilledButton.icon(
+                            onPressed: can && !ready ? db.download : null,
+                            icon: Icon(ready ? Icons.check : FluentIcons.arrow_download_24_regular),
+                            label: Text(
+                              ready ? 'הקבצים מוכנים' : 'הורדה והכנת הקבצים (${DbController.formatBytes(bytes)})',
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ),
+                        if (ready && db.message == null) ...[
+                          const SizedBox(height: AppTokens.spaceSM),
+                          Text('הקבצים מוכנים. העבירו את התוכנה יחד עם התיקייה "$dbMirrorDirName" למחשב השני.',
+                              style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                        ],
                       ],
                     ],
                   ],
