@@ -66,9 +66,23 @@ class AppController extends ChangeNotifier {
 
   // ─── אתחול ────────────────────────────────────────────────────────
 
-  Future<void> init() async {
+  Future<void> init({bool carryOverSettings = false}) async {
     dataDir = await AppPaths.dataDir();
-    await _loadSettings();
+    final before = (ignoreShas, themeMode, startScreen, lockHash);
+    final found = await _loadSettings();
+    if (carryOverSettings) {
+      // מעבר לתיקיית נתונים אחרת: לא מאבדים בשקט את ההגדרות, ובפרט את הנעילה.
+      if (!found) {
+        ignoreShas = before.$1;
+        themeMode = before.$2;
+        startScreen = before.$3;
+        lockHash = before.$4;
+        await _saveSettings();
+      } else if (before.$4 != null && lockHash != before.$4) {
+        lockHash = before.$4;
+        await _saveSettings();
+      }
+    }
     final path = p.join(dataDir, pakFileName);
     try {
       final exists = await File(path).exists();
@@ -118,7 +132,8 @@ class AppController extends ChangeNotifier {
 
   File get _settingsFile => File(p.join(dataDir, 'settings.json'));
 
-  Future<void> _loadSettings() async {
+  /// `false` כשאין קובץ הגדרות תקין בתיקייה (ואז הערכים בזיכרון לא משתנים).
+  Future<bool> _loadSettings() async {
     try {
       final j = jsonDecode(await _settingsFile.readAsString()) as Map<String, dynamic>;
       ignoreShas = j['ignoreShas'] == true;
@@ -130,7 +145,10 @@ class AppController extends ChangeNotifier {
       startScreen = StartScreen.values.where((e) => e.name == j['startScreen']).firstOrNull ?? StartScreen.home;
       final lh = j['lockHash'];
       lockHash = lh is String && lh.isNotEmpty ? lh : null;
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _saveSettings() async {
@@ -204,7 +222,7 @@ class AppController extends ChangeNotifier {
     singleFiles = [];
     hashes = {};
     await AppPaths.setDataDirOverride(dir);
-    await init();
+    await init(carryOverSettings: true);
   }
 
   // ─── רשת ──────────────────────────────────────────────────────────
