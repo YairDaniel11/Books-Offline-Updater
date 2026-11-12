@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
+import 'package:flutter/services.dart';
 
 import '../controllers/app_controller.dart';
 import '../db/db_controller.dart';
@@ -9,11 +10,16 @@ import '../update/app_update.dart';
 import '../update/update_banner.dart';
 import '../widgets/activity_card.dart';
 import '../widgets/message_banner.dart';
+import '../widgets/status_bar.dart';
 import 'copy_screen.dart';
 import 'db_screen.dart';
 import 'home_screen.dart';
+import 'prepare_screen.dart';
+import 'tabs.dart';
 import 'settings_screen.dart';
 import 'txt_books_screen.dart';
+
+export 'tabs.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key, required this.controller});
@@ -22,11 +28,6 @@ class AppShell extends StatefulWidget {
 
   @override
   State<AppShell> createState() => _AppShellState();
-}
-
-/// אינדקסי הלשוניות בסרגל הצד.
-abstract final class Tabs {
-  static const home = 0, db = 1, txt = 2, copy = 3, settings = 4;
 }
 
 class _AppShellState extends State<AppShell> {
@@ -119,166 +120,83 @@ class _AppShellState extends State<AppShell> {
     final screens = <Widget>[
       HomeScreen(controller: c, db: _db, onNavigate: _goTo),
       DbScreen(db: _db, app: c),
-      TxtBooksScreen(controller: c, onGoDb: () => _goTo(Tabs.db)),
+      TxtBooksScreen(controller: c, onGoDb: () => _goTo(Tabs.home)),
       CopyScreen(db: _db, app: c, locked: _locked),
       SettingsScreen(controller: c, update: _update, onLockNow: _lockNow),
+      PrepareScreen(db: _db),
     ];
 
-    return Scaffold(
-      body: Row(
-        children: [
-          if (_locked)
-            Padding(
-              padding: const EdgeInsets.all(AppTokens.spaceSM),
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: IconButton(
+    final isHome = _index == Tabs.home;
+    return CallbackShortcuts(
+      bindings: {
+        // Esc חוזר לדף הבית ממסכי המשנה (לא כשהתוכנה נעולה).
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (!_locked && !isHome) _goTo(Tabs.home);
+        },
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          appBar: AppBar(
+            backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
+            automaticallyImplyLeading: false,
+            leading: _locked || isHome
+                ? null
+                : BackButton(onPressed: () => _goTo(Tabs.home)),
+            title: Text(_locked ? 'העתקה מהכונן' : Tabs.title(_index)),
+            actions: [
+              if (_locked)
+                IconButton(
                   tooltip: 'פתיחת הנעילה',
                   icon: const Icon(FluentIcons.lock_closed_24_regular),
                   onPressed: _unlock,
+                )
+              else if (_index != Tabs.settings)
+                IconButton(
+                  tooltip: 'הגדרות',
+                  icon: const Icon(FluentIcons.settings_24_regular),
+                  onPressed: () => _goTo(Tabs.settings),
                 ),
-              ),
-            )
-          else
-          NavigationRail(
-            selectedIndex: _index,
-            onDestinationSelected: _goTo,
-            labelType: NavigationRailLabelType.all,
-            destinations: const [
-              NavigationRailDestination(
-                icon: Icon(FluentIcons.home_24_regular),
-                selectedIcon: Icon(FluentIcons.home_24_filled),
-                label: Text('בית'),
-              ),
-              NavigationRailDestination(
-                icon: Icon(FluentIcons.database_24_regular),
-                selectedIcon: Icon(FluentIcons.database_24_filled),
-                label: Text('מסד ספרים (DB)', textAlign: TextAlign.center),
-              ),
-              NavigationRailDestination(
-                icon: Icon(FluentIcons.document_text_24_regular),
-                selectedIcon: Icon(FluentIcons.document_text_24_filled),
-                label: Text('ספרים בודדים (TXT)', textAlign: TextAlign.center),
-              ),
-              NavigationRailDestination(
-                icon: Icon(FluentIcons.copy_arrow_right_24_regular),
-                selectedIcon: Icon(FluentIcons.copy_arrow_right_24_filled),
-                label: Text('העתקת הספרים', textAlign: TextAlign.center),
-              ),
-              NavigationRailDestination(
-                icon: Icon(FluentIcons.settings_24_regular),
-                selectedIcon: Icon(FluentIcons.settings_24_filled),
-                label: Text('הגדרות'),
-              ),
+              const SizedBox(width: AppTokens.spaceSM),
             ],
           ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            child: Column(
-              children: [
-                if (!_locked) UpdateBanner(update: _update),
-                if (!_locked)
-                  _DbUpdateBanner(
-                    db: _db,
-                    onUpdate: () {
-                      _goTo(Tabs.home);
-                      _db.updateNow();
-                    },
-                  ),
-                if (c.lastMessage != null || c.activity != null)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(AppTokens.spaceMD, AppTokens.spaceXL, AppTokens.spaceMD, 0),
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: AppTokens.contentMaxWidth),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (c.lastMessage != null) ...[
-                              MessageBanner(controller: c),
-                              const SizedBox(height: AppTokens.spaceSM),
-                            ],
-                            if (c.activity != null) ActivityCard(controller: c),
+          bottomNavigationBar: ListenableBuilder(
+            listenable: Listenable.merge([c, _db]),
+            builder: (context, _) => AppStatusBar(
+              online: c.online,
+              driveVersion: _db.mirror?.manifest.version,
+              locked: _locked,
+              lockEnabled: c.lockHash != null,
+              appVersion: appVersion,
+            ),
+          ),
+          body: Column(
+            children: [
+              if (!_locked) UpdateBanner(update: _update),
+              if (c.lastMessage != null || c.activity != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(AppTokens.spaceMD, AppTokens.spaceMD, AppTokens.spaceMD, 0),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: AppTokens.contentMaxWidth),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (c.lastMessage != null) ...[
+                            MessageBanner(controller: c),
+                            const SizedBox(height: AppTokens.spaceSM),
                           ],
-                        ),
+                          if (c.activity != null) ActivityCard(controller: c),
+                        ],
                       ),
                     ),
                   ),
-                Expanded(child: IndexedStack(index: _index, children: screens)),
-              ],
-            ),
+                ),
+              Expanded(child: IndexedStack(index: _index, children: screens)),
+            ],
           ),
-        ],
+        ),
       ),
-    );
-  }
-}
-
-/// התראה בולטת בראש כל המסכים כשיש גרסה חדשה של מסד הספרים.
-class _DbUpdateBanner extends StatefulWidget {
-  const _DbUpdateBanner({required this.db, required this.onUpdate});
-  final DbController db;
-  final VoidCallback onUpdate;
-
-  @override
-  State<_DbUpdateBanner> createState() => _DbUpdateBannerState();
-}
-
-class _DbUpdateBannerState extends State<_DbUpdateBanner> {
-  int? _dismissedVersion;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: widget.db,
-      builder: (context, _) {
-        final db = widget.db;
-        final v = db.remote?.manifest.version;
-        if (!db.updateAvailable || db.busy || v == null || _dismissedVersion == v) return const SizedBox.shrink();
-        final theme = Theme.of(context);
-        final cs = theme.colorScheme;
-        final from = db.local?.version;
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(AppTokens.spaceMD, AppTokens.spaceMD, AppTokens.spaceMD, 0),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: AppTokens.contentMaxWidth),
-              child: Container(
-                padding: const EdgeInsets.all(AppTokens.spaceMD),
-                decoration: BoxDecoration(color: cs.primary, borderRadius: AppTokens.borderRadiusAll),
-                child: Row(children: [
-                  Icon(FluentIcons.alert_badge_24_filled, color: cs.onPrimary, size: 32),
-                  const SizedBox(width: AppTokens.spaceMD),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('יש עדכון למסד הספרים',
-                            style: theme.textTheme.titleMedium?.copyWith(color: cs.onPrimary, fontWeight: FontWeight.w700)),
-                        Text(
-                          from != null ? 'גרסה $v זמינה (אצלך גרסה $from).' : 'גרסה $v זמינה.',
-                          style: TextStyle(color: cs.onPrimary),
-                        ),
-                      ],
-                    ),
-                  ),
-                  FilledButton(
-                    style: FilledButton.styleFrom(backgroundColor: cs.onPrimary, foregroundColor: cs.primary),
-                    onPressed: widget.onUpdate,
-                    child: const Text('עדכן עכשיו'),
-                  ),
-                  const SizedBox(width: AppTokens.spaceXS),
-                  TextButton(
-                    style: TextButton.styleFrom(foregroundColor: cs.onPrimary),
-                    onPressed: () => setState(() => _dismissedVersion = v),
-                    child: const Text('אחר כך'),
-                  ),
-                ]),
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 }

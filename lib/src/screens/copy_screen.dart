@@ -388,7 +388,7 @@ class _TxtCopyCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final muted = Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant);
     return AppCard(
-      title: 'ספרים בפורמט TXT',
+      title: 'ספרים בודדים (קבצי טקסט)',
       icon: FluentIcons.document_text_24_regular,
       info: 'רק למי שהביאו לו ספרים בפורמט TXT (קובץ המאגר). מי שמשתמש במסד הספרים אינו צריך את זה.',
       child: Column(
@@ -403,7 +403,7 @@ class _TxtCopyCard extends StatelessWidget {
               OutlinedButton.icon(
                 onPressed: app.busy ? null : _extractAll,
                 icon: const Icon(FluentIcons.folder_arrow_right_24_regular),
-                label: const Text('העתק את כל ספרי ה-TXT...'),
+                label: const Text('העתק את כל הספרים הבודדים...'),
               ),
               TextButton.icon(
                 onPressed: app.busy

@@ -15,7 +15,7 @@ import '../widgets/info_icon.dart';
 
 const _defaultDbFileName = 'otzarya-unofficial-books.db';
 
-/// לשונית "מסד ספרים (DB)": עדכון בלחיצה אחת, ש"ס וגשל, ומחשב בלי אינטרנט.
+/// "אפשרויות מסד הספרים": מיקום המסד, ש"ס וגשל ופרטים למתקדמים. ההכנה למחשב בלי אינטרנט במסך נפרד.
 class DbScreen extends StatelessWidget {
   const DbScreen({super.key, required this.db, required this.app});
 
@@ -35,11 +35,6 @@ class DbScreen extends StatelessWidget {
   Future<void> _pickNewDbFolder() async {
     final dir = await FilePicker.getDirectoryPath(dialogTitle: 'בחירת תיקייה למסד החדש');
     if (dir != null) await db.setTarget(p.join(dir, _defaultDbFileName));
-  }
-
-  Future<void> _detectFromFile() async {
-    final f = await FilePicker.pickFile(dialogTitle: 'בחירת עותק של המסד של המחשב השני');
-    if (f?.path != null) await db.detectVersionFrom(f!.path!);
   }
 
   @override
@@ -67,8 +62,6 @@ class DbScreen extends StatelessWidget {
                     _MyDbCard(db: db, onPickExisting: _pickExistingDb, onPickNew: _pickNewDbFolder),
                     const SizedBox(height: AppTokens.spaceMD),
                     _ShasCard(db: db, app: app),
-                    const SizedBox(height: AppTokens.spaceMD),
-                    _OfflineCard(db: db, onDetect: _detectFromFile),
                     const SizedBox(height: AppTokens.spaceMD),
                     _TechnicalDetails(db: db, onPickMirror: _pickMirror),
                   ],
@@ -235,92 +228,6 @@ class _ShasCard extends StatelessWidget {
                 Text(app.online ? 'לא נמצא ברשימת הספרים' : 'זמין רק עם חיבור לרשת', style: _muted(context)),
             ],
           ),
-        ],
-      ),
-    );
-  }
-}
-
-/// מחשב בלי אינטרנט: במחשב מחובר מכינים קבצים, ובמחשב הלא מחובר מתקינים אותם.
-class _OfflineCard extends StatelessWidget {
-  const _OfflineCard({required this.db, required this.onDetect});
-  final DbController db;
-  final VoidCallback onDetect;
-
-  @override
-  Widget build(BuildContext context) {
-    final r = db.remote?.manifest;
-    final can = r != null && !db.busy;
-    final bytes = db.downloadBytes;
-    final sel = db.selectedDownload;
-    final delta = sel.isNotEmpty && sel.first.isDelta;
-    return AppCard(
-      title: 'הכנת ספרים למחשב בלי אינטרנט',
-      icon: FluentIcons.cloud_off_24_regular,
-      info: 'מכינים כאן קבצים, מעבירים את התוכנה יחד עם התיקייה "$dbMirrorDirName" (למשל בדיסק און קי) '
-          'למחשב שאין בו רשת, ושם פותחים את לשונית "העתקת הספרים". אם יש עותק של המסד של המחשב השני, '
-          'בחרו אותו והתוכנה תוריד רק את מה שחסר לו; אפשר גם לבחור ידנית את הגרסה שיש לו '
-          'ולהוריד רק את קובץ העדכון שלה. בלי בחירה יורד המסד המלא.',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Wrap(
-            spacing: AppTokens.spaceSM,
-            runSpacing: AppTokens.spaceSM,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              OutlinedButton.icon(
-                onPressed: can && !db.inspecting ? onDetect : null,
-                icon: const Icon(FluentIcons.search_24_regular),
-                label: Text(db.inspecting ? 'מזהה...' : 'בחר עותק של המסד של המחשב השני'),
-              ),
-              if (db.fromVersion != null)
-                TextButton(onPressed: db.busy ? null : db.clearTransferVersion, child: const Text('אין לו מסד')),
-            ],
-          ),
-          if (r != null && db.versionOptions.isNotEmpty) ...[
-            const SizedBox(height: AppTokens.spaceSM),
-            Wrap(
-              spacing: AppTokens.spaceSM,
-              runSpacing: AppTokens.spaceSM,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                const Text('או בחרו ידנית:'),
-                DropdownButton<int?>(
-                  value: db.fromVersion,
-                  onChanged: db.busy ? null : db.setFromVersion,
-                  items: [
-                    DropdownMenuItem<int?>(
-                      value: null,
-                      child: Text('המסד המלא (${DbController.formatBytes(r.full.downloadSize)})'),
-                    ),
-                    for (final o in db.versionOptions)
-                      DropdownMenuItem<int?>(
-                        value: o.version,
-                        child: Text('עדכון מגרסה ${o.version} (${DbController.formatBytes(o.bytes)})'),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: AppTokens.spaceSM),
-          Text(r == null
-              ? 'ההכנה זמינה רק עם חיבור לרשת.'
-              : delta
-                  ? 'יורד: עדכון מגרסה ${db.fromVersion} לגרסה ${r.version}.'
-                  : 'יורד: המסד המלא (גרסה ${r.version}).'),
-          const SizedBox(height: AppTokens.spaceSM),
-          FilledButton.icon(
-            onPressed: can && sel.isNotEmpty ? db.download : null,
-            icon: const Icon(FluentIcons.arrow_download_24_regular),
-            label: Text(bytes == 0 && sel.isNotEmpty ? 'הקבצים מוכנים' : 'הכן קבצים (${DbController.formatBytes(bytes)})'),
-          ),
-          if (bytes == 0 && sel.isNotEmpty) ...[
-            const SizedBox(height: AppTokens.spaceSM),
-            Text('הקבצים מוכנים. העבירו את התוכנה יחד עם התיקייה "$dbMirrorDirName" למחשב השני.',
-                style: _muted(context)),
-          ],
         ],
       ),
     );
