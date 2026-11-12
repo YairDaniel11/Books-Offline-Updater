@@ -74,55 +74,76 @@ class OtzariaLocator {
   static Future<String?> findDbPath({String? root}) async {
     final dir = root ?? dataRoot();
     if (dir == null) return null;
-    return _exclusive(() async {
-      Directory? scratch;
-      Box<dynamic>? box;
-      try {
-        // קריאה מעותק: פתיחת הקופסה במקומה הייתה יוצרת נעילה ומתנגשת עם אוצריא פתוחה.
-        scratch = await Directory.systemTemp.createTemp('otzaria-settings-');
-        final name = '$_boxName-${_counter++}';
-        await File(p.join(dir, _boxFile)).copy(p.join(scratch.path, '$name.hive'));
-        Hive.init(scratch.path);
-        box = await Hive.openBox<dynamic>(name, path: scratch.path);
-        for (final e in _parseList(box.get(_keyAttached))) {
-          final path = e['path'];
-          if (e['slug'] == dbLibraryId && path is String && path.isNotEmpty) return path;
-        }
-        return null;
-      } catch (_) {
-        return null;
-      } finally {
-        try {
-          await box?.close();
-        } catch (_) {}
-        try {
-          await scratch?.delete(recursive: true);
-        } catch (_) {}
+    return _exclusive(() => _readPath(dir));
+  }
+
+  /// קריאה מעותק של הקופסה (בתוך התור הקיים).
+  static Future<String?> _readPath(String dir) async {
+    Directory? scratch;
+    Box<dynamic>? box;
+    try {
+      // קריאה מעותק: פתיחת הקופסה במקומה הייתה יוצרת נעילה ומתנגשת עם אוצריא פתוחה.
+      scratch = await Directory.systemTemp.createTemp('otzaria-settings-');
+      final name = '$_boxName-${_counter++}';
+      await File(p.join(dir, _boxFile)).copy(p.join(scratch.path, '$name.hive'));
+      Hive.init(scratch.path);
+      box = await Hive.openBox<dynamic>(name, path: scratch.path);
+      for (final e in _parseList(box.get(_keyAttached))) {
+        final path = e['path'];
+        if (e['slug'] == dbLibraryId && path is String && path.isNotEmpty) return path;
       }
-    });
+      return null;
+    } catch (_) {
+      return null;
+    } finally {
+      try {
+        await box?.close();
+      } catch (_) {}
+      try {
+        await scratch?.delete(recursive: true);
+      } catch (_) {}
+    }
   }
 
   /// מצרף את [dbPath] לאוצריא (או מעדכן את הנתיב אם כבר צורף), כדי שהספרים יוצגו בה מעצמם.
   /// על הקורא לוודא שאוצריא סגורה. מחזיר `true` בהצלחה.
+  ///
+  /// בטיחות: לא כותבים כשהקובץ לא נקרא במלואו או כשרשימת הספריות במבנה לא צפוי (כדי לא למחוק ספריות של המשתמש);
+  /// נשמר גיבוי חד-פעמי לפני הכתיבה הראשונה; אחרי הכתיבה קוראים מחדש ומאמתים, ובכשל משחזרים את הקובץ.
   static Future<bool> attach(String dbPath, {String? root}) async {
     final dir = root ?? dataRoot();
     if (dir == null || !p.isAbsolute(dbPath)) return false;
     return _exclusive(() async {
       if (Hive.isBoxOpen(_boxName)) return false;
+      final file = File(p.join(dir, _boxFile));
       Box<dynamic>? box;
+      File? snapshot;
+      var wrote = false;
       try {
         Hive.init(dir);
-        // בלי שחזור אוטומטי: הוא עלול לקצץ קובץ הגדרות פגום של המשתמש.
+        // בלי שחזור אוטומטי: הוא עלול לקצץ קובץ הגדרות פגום של המשתמש, ובמקום זה נכשלים בלי לכתוב.
         box = await Hive.openBox<dynamic>(_boxName, path: dir, crashRecovery: false);
-        if (box.path == null || !p.equals(box.path!, p.join(dir, _boxFile))) return false;
-        final list = _parseList(box.get(_keyAttached));
-        final i = list.indexWhere((e) => e['slug'] == dbLibraryId);
+        if (box.path == null || !p.equals(box.path!, file.path)) return false;
+        final raw = box.get(_keyAttached);
+        final List<dynamic> list;
+        if (raw == null || (raw is String && raw.isEmpty)) {
+          list = [];
+        } else if (raw is String) {
+          final j = jsonDecode(raw);
+          if (j is! List) return false; // מבנה לא צפוי: לא נוגעים
+          list = j;
+        } else {
+          return false;
+        }
+        // ערכים שאינם מפה נשארים כמות שהם (לא מוחקים דבר מהרשימה של המשתמש).
+        final i = list.indexWhere((e) => e is Map && e['slug'] == dbLibraryId);
         if (i >= 0) {
-          if (list[i]['path'] == dbPath && list[i]['hidden'] != true) return true;
-          list[i] = {...list[i], 'path': dbPath, 'hidden': false};
+          final cur = Map<String, dynamic>.from(list[i] as Map);
+          if (cur['path'] == dbPath && cur['hidden'] != true) return true;
+          list[i] = {...cur, 'path': dbPath, 'hidden': false};
         } else {
           final maxPriority = list.fold<int>(-1, (m, e) {
-            final v = (e['priority'] as num?)?.toInt() ?? 0;
+            final v = e is Map ? (e['priority'] as num?)?.toInt() ?? 0 : 0;
             return v > m ? v : m;
           });
           list.add({
@@ -136,13 +157,35 @@ class OtzariaLocator {
             'addedAt': DateTime.now().toIso8601String(),
           });
         }
+        // גיבוי חד-פעמי של הקובץ המקורי, ועותק זמני לשחזור אם הכתיבה נכשלת.
+        final backup = File('${file.path}.books-update.bak');
+        if (!await backup.exists()) await file.copy(backup.path);
+        snapshot = await file.copy('${file.path}.books-update.tmp');
+        wrote = true;
         await box.put(_keyAttached, jsonEncode(list));
-        return true;
+        await box.close();
+        box = null;
+        // אימות: קוראים מחדש ומוודאים שהנתיב נקלט.
+        if (await _readPath(dir) == dbPath) return true;
+        await snapshot.copy(file.path);
+        return false;
       } catch (_) {
+        if (wrote && snapshot != null) {
+          try {
+            await box?.close();
+          } catch (_) {}
+          box = null;
+          try {
+            await snapshot.copy(file.path);
+          } catch (_) {}
+        }
         return false;
       } finally {
         try {
           await box?.close();
+        } catch (_) {}
+        try {
+          if (snapshot != null && await snapshot.exists()) await snapshot.delete();
         } catch (_) {}
       }
     });
