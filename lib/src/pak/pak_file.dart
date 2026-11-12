@@ -56,6 +56,7 @@ class PakFile {
 
   static Future<PakFile> openOrCreate(String path, {bool allowCreate = true}) async {
     final f = File(path);
+    await _recoverCompact(path);
     if (!await f.exists()) {
       if (!allowCreate) throw FileSystemException('קובץ PAK לא נמצא', path);
       final raf = await f.open(mode: FileMode.write);
@@ -75,6 +76,20 @@ class PakFile {
     final pak = PakFile._(path, raf, readOnly);
     await pak._load();
     return pak;
+  }
+
+  /// התאוששות מהפסקה באמצע "דחיסה מחדש" (בגרסאות שמחקו את הישן לפני שינוי השם):
+  /// אם אין קובץ ראשי אבל יש `.compact` שלם, הוא הופך למאגר.
+  static Future<void> _recoverCompact(String path) async {
+    final tmp = File('$path.compact');
+    try {
+      if (await File(path).exists() || !await tmp.exists()) return;
+      final probe = await PakFile.openOrCreate(tmp.path, allowCreate: false);
+      await probe.close();
+      await tmp.rename(path);
+    } catch (_) {
+      // קובץ חלקי: לא נוגעים בו, והמאגר ייווצר מחדש.
+    }
   }
 
   static Uint8List _headerBytes() {
@@ -392,7 +407,8 @@ class PakFile {
       .._end = pos;
     await replacement._commit();
     await raf.close();
-    await File(path).delete();
+    // החלפה אטומית בשינוי שם יחיד שדורס את הקיים (ב-Windows dart:io משתמש ב-MoveFileEx עם REPLACE_EXISTING):
+    // אין רגע שבו אין מאגר. מחיקה קודם הייתה משאירה בלי מאגר אם החשמל נופל בין השניים.
     await tmpFile.rename(path);
     return oldLen - pos;
   }

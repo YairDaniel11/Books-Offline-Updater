@@ -84,6 +84,26 @@ void main() {
     await pak.close();
   });
 
+  test('התאוששות: יש רק .compact שלם והקובץ הראשי חסר', () async {
+    final pakPath = p.join(tmp.path, 'r.pak');
+    final pak = await build(pakPath);
+    final count = pak.files.length;
+    await pak.close();
+    await File(pakPath).rename('$pakPath.compact');
+    final back = await PakFile.openOrCreate(pakPath, allowCreate: false);
+    expect(back.files.length, count);
+    expect(File('$pakPath.compact').existsSync(), isFalse);
+    await back.close();
+  });
+
+  test('.compact חלקי לא הופך למאגר', () async {
+    final pakPath = p.join(tmp.path, 's.pak');
+    await File('$pakPath.compact').writeAsBytes(List.filled(100, 7));
+    final fresh = await PakFile.openOrCreate(pakPath);
+    expect(fresh.files, isEmpty);
+    await fresh.close();
+  });
+
   test('CRC שגוי נתפס', () async {
     final pak = await build(p.join(tmp.path, 'd.pak'));
     final e = pak.files['תיקייה/ספר א.txt']!;
