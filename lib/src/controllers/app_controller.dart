@@ -2,13 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 import '../pak/pak_file.dart';
 import '../services/zip_extract.dart';
 import '../services/app_paths.dart';
+import '../services/password_hash.dart';
 import '../services/repo_service.dart';
 
 enum ItemStatus { none, ok, update }
@@ -164,17 +164,36 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  static String _hashPassword(String password) =>
-      sha256.convert(utf8.encode('books-offline-lock:$password')).toString();
+  final AttemptThrottle _unlockThrottle = AttemptThrottle();
 
   /// [password] = null מסיר את הנעילה.
   void setLockPassword(String? password) {
-    lockHash = password == null || password.isEmpty ? null : _hashPassword(password);
+    lockHash = password == null || password.isEmpty ? null : PasswordHash.create(password);
+    _unlockThrottle.recordSuccess();
     _saveSettings();
     notifyListeners();
   }
 
-  bool checkPassword(String password) => lockHash != null && _hashPassword(password) == lockHash;
+  /// כמה זמן צריך להמתין לפני ניסיון נוסף (אפס = אפשר לנסות).
+  Duration get unlockWait => _unlockThrottle.remaining;
+
+  /// בודק סיסמה עם האטה אחרי ניסיונות שגויים. ניסיון בזמן המתנה נדחה בלי בדיקה.
+  /// גיבוב ישן (בלי מלח) משודרג בשקט לגיבוב חדש אחרי פתיחה מוצלחת.
+  bool checkPassword(String password) {
+    final stored = lockHash;
+    if (stored == null) return false;
+    if (_unlockThrottle.blocked) return false;
+    if (!PasswordHash.verify(password, stored)) {
+      _unlockThrottle.recordFailure();
+      return false;
+    }
+    _unlockThrottle.recordSuccess();
+    if (PasswordHash.isLegacy(stored)) {
+      lockHash = PasswordHash.create(password);
+      _saveSettings();
+    }
+    return true;
+  }
 
   Future<void> changeDataDir(String? dir) async {
     if (busy) return;

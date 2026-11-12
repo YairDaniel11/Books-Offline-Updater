@@ -68,10 +68,16 @@ class _AppShellState extends State<AppShell> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSt) {
           void submit() {
-            if (widget.controller.checkPassword(ctrl.text)) {
+            final waitBefore = widget.controller.unlockWait;
+            if (waitBefore > Duration.zero) {
+              setSt(() => err = 'יותר מדי ניסיונות. נסו שוב בעוד ${waitBefore.inSeconds + 1} שניות');
+            } else if (widget.controller.checkPassword(ctrl.text)) {
               Navigator.pop(ctx, true);
             } else {
-              setSt(() => err = 'הסיסמה שגויה');
+              final w = widget.controller.unlockWait;
+              setSt(() => err = w > Duration.zero
+                  ? 'הסיסמה שגויה. נסו שוב בעוד ${w.inSeconds + 1} שניות'
+                  : 'הסיסמה שגויה');
             }
           }
 
