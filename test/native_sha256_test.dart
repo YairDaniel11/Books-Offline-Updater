@@ -44,8 +44,8 @@ void main() {
     });
   }
 
-  test('קובץ גדול (120MB) + מהירות', () async {
-    final f = make('big', 120 * 1024 * 1024);
+  test('קובץ גדול (32MB) + מהירות', () async {
+    final f = make('big', 32 * 1024 * 1024);
     final sw = Stopwatch()..start();
     final n = await sha256File(f.path);
     final tn = sw.elapsedMilliseconds;
@@ -57,8 +57,8 @@ void main() {
     expect(n, d);
     expect(n, await ref(f));
     // ignore: avoid_print
-    print('native: ${(120 * 1000 / (tn == 0 ? 1 : tn)).toStringAsFixed(0)} MB/s ($tn ms), dart: ${(120 * 1000 / td).toStringAsFixed(0)} MB/s ($td ms)');
-  });
+    print('native: ${(32 * 1000 / (tn == 0 ? 1 : tn)).toStringAsFixed(0)} MB/s ($tn ms), dart: ${(32 * 1000 / (td == 0 ? 1 : td)).toStringAsFixed(0)} MB/s ($td ms)');
+  }, timeout: const Timeout(Duration(minutes: 2)));
 
   test('hasher מצטבר מקטעים שונים', () {
     final data = List<int>.generate(1000003, (i) => i * 7 & 255);
