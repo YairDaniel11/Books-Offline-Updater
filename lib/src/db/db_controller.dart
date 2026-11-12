@@ -26,6 +26,11 @@ class InstallPlan {
   bool get canRun => action == InstallAction.delta || action == InstallAction.full;
 }
 
+class _ChainStopped implements Exception {
+  _ChainStopped(this.reason);
+  final String reason;
+}
+
 class DbActivity {
   DbActivity(this.title);
   String title;
@@ -59,7 +64,11 @@ class DbController extends ChangeNotifier {
   DbRelease? mirror;
   String? mirrorError;
 
+  /// המסד שביעד מול הגרסה העדכנית ברשת (כשיש חיבור; אחרת מול המראה). משמש לזיהוי "יש עדכון".
   LocalDbInfo? local;
+
+  /// המסד שביעד מול תיקיית המראה בלבד: קובע מה אפשר להתקין ממנה (תיקייה על דיסק און קי יכולה להיות ישנה מהרשת).
+  LocalDbInfo? localMirror;
   bool inspecting = false;
 
   /// המקום שבו אוצריא שומרת את המסד במחשב הזה, אם נמצא.
@@ -210,7 +219,7 @@ class DbController extends ChangeNotifier {
     }
     checking = false;
     notifyListeners();
-    if (remote != null && targetDb.isNotEmpty && local == null && !busy) await inspectTarget();
+    if (remote != null && targetDb.isNotEmpty && !busy) await inspectTarget();
   }
 
   // ─── מראה ─────────────────────────────────────────────────────────
@@ -238,6 +247,7 @@ class DbController extends ChangeNotifier {
     if (busy) return;
     targetDb = path;
     local = null;
+    localMirror = null;
     await _save();
     await inspectTarget();
   }
@@ -284,26 +294,37 @@ class DbController extends ChangeNotifier {
   /// מזהה את גרסת המסד שביעד (חישוב SHA-256 על הקובץ).
   Future<void> inspectTarget() async {
     local = null;
+    localMirror = null;
     if (targetDb.isEmpty || !await File(targetDb).exists()) {
       notifyListeners();
       return;
     }
-    final m = (mirror ?? remote)?.manifest;
-    if (m == null) {
+    final mm = mirror?.manifest;
+    final rm = remote?.manifest;
+    if (mm == null && rm == null) {
       notifyListeners();
       return;
     }
     inspecting = true;
     notifyListeners();
     try {
-      local = await _service.inspectLocalDb(
-        m,
-        targetDb,
-        knownSha: await _cachedSha(targetDb),
-        steps: (mirrorSteps ?? remoteSteps)?.manifest,
-        chainIsWorthIt: (c) => _worthIt(c, m),
-      );
-      await _rememberSha(targetDb, local!.sha256);
+      String? sha = await _cachedSha(targetDb);
+      Future<LocalDbInfo> inspect(DbManifest m, StepsManifest? steps) async {
+        final info = await _service.inspectLocalDb(
+          m,
+          targetDb,
+          knownSha: sha,
+          steps: steps,
+          chainIsWorthIt: (c) => _worthIt(c, m),
+        );
+        sha = info.sha256;
+        return info;
+      }
+
+      if (mm != null) localMirror = await inspect(mm, mirrorSteps?.manifest);
+      // "יש עדכון" נקבע לפי הרשת כשיש חיבור, ולא לפי מה שנמצא בתיקיית המראה.
+      local = rm != null ? await inspect(rm, remoteSteps?.manifest) : localMirror;
+      await _rememberSha(targetDb, sha!);
     } catch (e) {
       _msg('לא ניתן לקרוא את הקובץ: $e', error: true);
     }
@@ -448,6 +469,9 @@ class DbController extends ChangeNotifier {
     _cancel = false;
     activity = DbActivity('בודק את המסד');
     notifyListeners();
+    var applied = 0;
+    var artifactsCount = 1;
+    final tmpDir = _updateTmpDir();
     try {
       var artifacts = <DbArtifact>[m.full];
       if (await File(targetDb).exists()) {
@@ -468,12 +492,19 @@ class DbController extends ChangeNotifier {
         }
         if (info.updates != null) artifacts = info.updates!;
       }
+      artifactsCount = artifacts.length;
       final isDelta = artifacts.first.isDelta;
       activity!.title = isDelta ? 'מוריד עדכון' : 'מוריד את המסד המלא';
       notifyListeners();
-      await _service.download(r, artifacts, mirrorDir,
+      // תיקיית הורדה זמנית ליד המסד, לא תיקיית המראה: קבצים שהוכנו שם למחשב אחר (והמניפסט שמצביע עליהם)
+      // לא נמחקים ולא נדרסים. נשארת אחרי הפסקה כדי שההורדה תימשך, ונמחקת אחרי עדכון מוצלח.
+      await _service.download(r, artifacts, tmpDir,
           onProgress: _progress, isCancelled: () => _cancel, steps: remoteSteps);
       for (var i = 0; i < artifacts.length; i++) {
+        // בשרשרת ארוכה אוצריא עלולה להיפתח באמצע: בודקים לפני כל צעד.
+        if (i > 0 && await OtzariaLocator.isRunning()) {
+          throw _ChainStopped('אוצריא נפתחה באמצע העדכון');
+        }
         final a = artifacts[i];
         activity!.title = !isDelta
             ? 'מתקין את המסד'
@@ -481,29 +512,44 @@ class DbController extends ChangeNotifier {
                 ? 'מעדכן את המסד (${i + 1} מתוך ${artifacts.length})'
                 : 'מעדכן את המסד';
         notifyListeners();
-        await _service.install(a, mirrorDir, targetDb, onProgress: _progress, isCancelled: () => _cancel);
+        await _service.install(a, tmpDir, targetDb, onProgress: _progress, isCancelled: () => _cancel);
+        applied++;
         await _rememberSha(targetDb, a.sha256);
       }
       // הקבצים כבר הוחלו: לא משאירים מאות MB מיותרים בדיסק.
-      for (final a in artifacts) {
-        for (final part in a.parts) {
-          try {
-            await File(DbService.partPath(mirrorDir, part)).delete();
-          } catch (_) {}
-        }
-      }
+      try {
+        await Directory(tmpDir).delete(recursive: true);
+      } catch (_) {}
       _msg('המסד עודכן לגרסה ${m.version}.${await _ensureAttached()}');
     } on DownloadCancelled {
-      _msg('הפעולה נעצרה. המסד הקיים לא שונה.');
+      _msg(_stoppedText(applied, total: artifactsCount));
+    } on _ChainStopped catch (e) {
+      _msg('${e.reason}. ${_stoppedText(applied, total: artifactsCount, always: true)} סגרו את אוצריא ולחצו שוב.', error: true);
     } catch (e) {
       final text = e.toString();
       final cancelled = text.contains('הפעולה בוטלה');
-      _msg(cancelled ? 'הפעולה נעצרה. המסד הקיים לא שונה.' : _failText(e), error: !cancelled);
+      if (cancelled) {
+        _msg(_stoppedText(applied, total: artifactsCount));
+      } else if (applied > 0) {
+        _msg('${_failText(e)}\n${_stoppedText(applied, total: artifactsCount, always: true)}', error: true);
+      } else {
+        _msg(_failText(e), error: true);
+      }
     }
     activity = null;
     notifyListeners();
     await refreshMirror();
     await inspectTarget();
+  }
+
+  String _updateTmpDir() => p.join(p.dirname(targetDb), '.books-update-tmp');
+
+  /// הודעת עצירה: אם כבר הוחלו צעדים, המסד עודכן לגרסת ביניים תקינה ואפשר להמשיך משם.
+  static String _stoppedText(int applied, {required int total, bool always = false}) {
+    if (applied > 0) {
+      return 'המסד עודכן לגרסת ביניים תקינה ($applied מתוך $total צעדים הוחלו) ואפשר להמשיך משם: לחצו שוב על העדכון.';
+    }
+    return always ? 'המסד הקיים לא שונה.' : 'הפעולה נעצרה. המסד הקיים לא שונה.';
   }
 
   /// מוחק את זיהוי הגרסה של המחשב היעד (להורדת המסד המלא).
@@ -525,7 +571,7 @@ class DbController extends ChangeNotifier {
           ? InstallPlan(InstallAction.full, 'הקובץ אינו קיים: יותקן המסד המלא (גרסה ${m.version}).', artifact: m.full)
           : InstallPlan(InstallAction.blocked, 'בתיקייה אין את קובץ המסד המלא, ולכן אי אפשר ליצור מסד חדש.');
     }
-    final info = local;
+    final info = localMirror;
     if (info == null) return null; // עדיין מזהים
     switch (info.state) {
       case LocalDbState.current:
