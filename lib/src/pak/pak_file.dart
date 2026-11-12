@@ -221,7 +221,9 @@ class PakFile {
         if (e.method != 0 && e.method != 8) {
           throw FormatException('שיטת דחיסה לא נתמכת (${e.method}) בקובץ ${e.name}');
         }
-        final path = prefix.isEmpty ? e.name : '$prefix/${e.name}';
+        final safe = safeZipPath(e.name);
+        if (safe == null) throw FormatException('שם קובץ לא בטוח בארכיון: ${e.name}');
+        final path = prefix.isEmpty ? safe : '$prefix/$safe';
         seen.add(path);
         final old = files[path];
         if (old != null && old.crc == e.crc && old.size == e.size) {

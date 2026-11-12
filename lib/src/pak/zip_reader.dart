@@ -2,6 +2,27 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+final _reservedWinName = RegExp(r'^(con|prn|aux|nul|com[0-9]|lpt[0-9])$', caseSensitive: false);
+
+/// מנרמל שם רשומה בזיפ לנתיב יחסי בטוח עם "/" (מפרידי backslash נחשבים "/"), או `null` כשהוא מסוכן:
+/// "..", נתיב מוחלט, אות כונן, ":" (זרמי נתונים חלופיים), שמות שמורים של Windows (CON, NUL...),
+/// נקודה או רווח בסוף רכיב, תווי בקרה. הגנה מפני zip-slip.
+String? safeZipPath(String name) {
+  final n = name.replaceAll('\\', '/');
+  if (n.isEmpty || n.startsWith('/')) return null;
+  final parts = n.split('/');
+  if (parts.last.isEmpty) parts.removeLast(); // תיקייה: סלאש סופי
+  if (parts.isEmpty) return null;
+  for (final s in parts) {
+    if (s.isEmpty || s == '.' || s == '..') return null;
+    if (s.contains(':') || s.codeUnits.any((c) => c < 32)) return null;
+    if (s.endsWith('.') || s.endsWith(' ')) return null;
+    final dot = s.indexOf('.');
+    if (_reservedWinName.hasMatch(dot < 0 ? s : s.substring(0, dot).trimRight())) return null;
+  }
+  return parts.join('/');
+}
+
 /// רשומה במדריך המרכזי של zip.
 class ZipEntryInfo {
   ZipEntryInfo({
@@ -20,7 +41,7 @@ class ZipEntryInfo {
   final int size;
   final int localHeaderOffset;
 
-  bool get isDirectory => name.endsWith('/');
+  bool get isDirectory => name.endsWith('/') || name.endsWith('\\');
 }
 
 /// קורא zip מהדיסק בלי לטעון אותו לזיכרון: מפענח רק את המדריך המרכזי, ומאפשר
