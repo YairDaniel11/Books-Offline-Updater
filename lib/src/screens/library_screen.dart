@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../controllers/app_controller.dart';
+import '../services/hebrew_search.dart';
 import '../services/repo_service.dart';
 import '../theme/app_tokens.dart';
 
@@ -51,7 +52,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
     bool visit(BookItem n, int depth, List<_Row> sink) {
       final kids = kidsOf[n.path] ?? const <BookItem>[];
-      final selfMatch = (q.isEmpty || n.name.contains(q)) && (!_onlyChanges || _hasChange(n));
+      final selfMatch = (q.isEmpty || hebrewContains(n.name, q)) && (!_onlyChanges || _hasChange(n));
       final sub = <_Row>[];
       var anyKid = false;
       for (final k in kids) {
