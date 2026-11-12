@@ -38,7 +38,7 @@ void main() {
     expect(isSafeZipName('/etc/x'), isFalse);
     expect(isSafeZipName('C:/x'), isFalse);
     expect(isSafeZipName('a${bs}b'), isTrue); // backslash נחשב מפריד
-    expect(isSafeZipName('a${bs}..${bs}x'), isFalse);
+    expect(isSafeZipName('a$bs..${bs}x'), isFalse);
     expect(isSafeZipName('${bs}abs'), isFalse);
     expect(isSafeZipName('a/NUL'), isFalse);
     expect(isSafeZipName('con.txt'), isFalse);
@@ -47,7 +47,7 @@ void main() {
     expect(isSafeZipName('a/b.'), isFalse);
     expect(isSafeZipName('a /b'), isFalse);
     expect(isSafeZipName('console/x.txt'), isTrue);
-    expect(safeZipPath('סדר${bs}ברכות.pdf'), 'סדר/ברכות.pdf');
+    expect(safeZipPath('סדר$bsברכות.pdf'), 'סדר/ברכות.pdf');
     expect(isSafeZipName('סדר זרעים/ברכות.pdf'), isTrue);
   });
 
