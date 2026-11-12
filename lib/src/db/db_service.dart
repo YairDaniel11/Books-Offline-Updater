@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import '../services/repo_service.dart' show DownloadCancelled, githubRepo;
+import '../services/net_errors.dart';
 import 'db_manifest.dart';
 import 'zstd_stream.dart';
 
@@ -95,10 +96,7 @@ class DbService {
   Future<Uint8List> _getBytes(String url) async {
     final req = await _client.getUrl(Uri.parse(url));
     final res = await req.close().timeout(const Duration(seconds: 30));
-    if (res.statusCode != 200) {
-      await res.drain<void>();
-      throw DbException('שגיאת שרת ${res.statusCode}');
-    }
+    await ensureOk(res);
     final b = BytesBuilder();
     await for (final c in res.timeout(const Duration(seconds: 30))) {
       b.add(c);
@@ -117,7 +115,7 @@ class DbService {
     } on DbManifestException catch (e) {
       throw DbException(e.message);
     } catch (e) {
-      throw DbException('לא ניתן לבדוק את גרסת המסד ($e)');
+      throw DbException('לא ניתן לבדוק את גרסת המסד. ${friendlyNetError(e)}');
     }
   }
 
@@ -232,12 +230,9 @@ class DbService {
           final req = await _client.getUrl(Uri.parse(part.url));
           if (have > 0) req.headers.set(HttpHeaders.rangeHeader, 'bytes=$have-');
           final res = await req.close().timeout(const Duration(seconds: 30));
-          if (res.statusCode != 200 && res.statusCode != 206) {
-            await res.drain<void>();
-            throw DbException('שגיאת שרת ${res.statusCode}');
-          }
-          if (res.statusCode == 200 && have > 0) {
-            // השרת התעלם מ-Range: מתחילים מחדש.
+          await ensureOk(res, ok: const {200, 206});
+          if (have > 0 && !isExactContinuation(res, have)) {
+            // השרת התעלם מ-Range או החזיר טווח אחר: מתחילים מחדש.
             onBytes(-counted);
             counted = 0;
             have = 0;
@@ -267,10 +262,11 @@ class DbService {
         rethrow;
       } catch (e) {
         lastError = e;
+        if (isFinalNetFailure(e)) break; // הקובץ החלקי נשמר, ואין טעם לנסות שוב מיד
         await Future<void>.delayed(Duration(seconds: 2 * (attempt + 1)));
       }
     }
-    throw DbException('ההורדה של ${part.fileName} נכשלה: $lastError');
+    throw DbException('ההורדה של ${part.fileName} נכשלה. ${friendlyNetError(lastError!)}');
   }
 
   /// מוריד את כל חלקי [artifacts] לתיקיית המראה, ושומר ליד זה את המניפסט החתום.
@@ -419,10 +415,27 @@ class DbService {
         rethrow;
       }
       if (hadOld) await old.delete();
+      await deleteStaleSidecars(target);
     } finally {
       final t = File(tmpPath);
       if (await t.exists()) await t.delete();
     }
+  }
+
+  /// אחרי החלפת המסד מוחקים את קובצי העזר הישנים של SQLite שלידו (`-wal`, `-shm`, `-journal`):
+  /// אחרת SQLite עלול להחיל אותם על המסד החדש. נקרא רק אחרי החלפה שהצליחה (כלומר הקובץ לא היה נעול).
+  static Future<List<String>> deleteStaleSidecars(String dbPath) async {
+    final deleted = <String>[];
+    for (final suffix in const ['-wal', '-shm', '-journal']) {
+      final f = File('$dbPath$suffix');
+      try {
+        if (await f.exists()) {
+          await f.delete();
+          deleted.add(f.path);
+        }
+      } catch (_) {}
+    }
+    return deleted;
   }
 
   /// התאוששות מהפסקה (קריסה, כיבוי) בין "יעד ← .old" ל-".new ← יעד" בהחלפת המסד:

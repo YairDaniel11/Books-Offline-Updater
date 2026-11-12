@@ -9,6 +9,8 @@ import 'package:path/path.dart' as p;
 import '../pak/pak_file.dart';
 import '../services/zip_extract.dart';
 import '../services/app_paths.dart';
+import '../services/copy_ledger.dart';
+import '../services/net_errors.dart';
 import '../services/repo_service.dart';
 
 enum ItemStatus { none, ok, update }
@@ -207,7 +209,7 @@ class AppController extends ChangeNotifier {
       }
     } catch (e) {
       online = false;
-      onlineError = e is RepoException ? e.message : 'אין חיבור לרשת';
+      onlineError = e is RepoException ? e.message : friendlyNetError(e);
     }
     checkingOnline = false;
     notifyListeners();
@@ -283,7 +285,7 @@ class AppController extends ChangeNotifier {
     } on DownloadCancelled {
       _msg('הפעולה נעצרה.');
     } catch (e) {
-      _msg('ההורדה נכשלה: $e', error: true);
+      _msg('ההורדה נכשלה: ${friendlyNetError(e)}', error: true);
     } finally {
       try {
         await File(zipPath).delete();
@@ -473,7 +475,7 @@ class AppController extends ChangeNotifier {
       await _commit();
       await _maybeCompact();
     } catch (e) {
-      failed.add('$e');
+      failed.add(friendlyNetError(e));
     } finally {
       final cancelled = activity?.cancelled ?? false;
       activity = null;
@@ -577,7 +579,7 @@ class AppController extends ChangeNotifier {
       await pak!.putBytes(f.path, Uint8List.fromList(bytes));
       hashes[f.path] = f.hash;
     } catch (e) {
-      failed.add('דורות.csv: $e');
+      failed.add('דורות.csv: ${friendlyNetError(e)}');
     }
   }
 
@@ -667,6 +669,7 @@ class AppController extends ChangeNotifier {
     final totalBytes = entries.fold<int>(0, (s, e) => s + e.value.size);
     var doneBytes = 0, copied = 0, skipped = 0, deleted = 0;
     final failed = <String>[];
+    final ledger = await CopyLedger.load(destDir);
     try {
       for (final e in entries) {
         if (activity!.cancelled) break;
@@ -679,10 +682,12 @@ class AppController extends ChangeNotifier {
         }
         if (same) {
           skipped++;
+          ledger.add(e.key);
         } else {
           try {
             await pak!.extractTo(e.value, target);
             copied++;
+            ledger.add(e.key);
           } catch (err) {
             failed.add('${e.key}: $err');
           }
@@ -693,9 +698,13 @@ class AppController extends ChangeNotifier {
           totalBytes > 0 ? doneBytes / totalBytes : null,
         );
       }
-      if (!activity!.cancelled) deleted = await _cleanupDestination(destDir, prefixes);
+      await ledger.save();
+      if (!activity!.cancelled) {
+        deleted = await _cleanupDestination(destDir, prefixes, ledger);
+        await ledger.save();
+      }
     } catch (e) {
-      failed.add('$e');
+      failed.add(friendlyNetError(e));
     } finally {
       final cancelled = activity?.cancelled ?? false;
       activity = null;
@@ -715,7 +724,8 @@ class AppController extends ChangeNotifier {
   }
 
   /// מוחק ביעד קבצים ישנים שהוסרו או הועברו במאגר, כדי שלא יישארו כפולים אחרי עדכון.
-  Future<int> _cleanupDestination(String destDir, List<String>? prefixes) async {
+  /// רק קבצים שהתוכנה העתיקה בעצמה אל התיקייה הזאת (לפי [ledger]).
+  Future<int> _cleanupDestination(String destDir, List<String>? prefixes, CopyLedger ledger) async {
     bool inScope(String path) =>
         prefixes == null || prefixes.any((pre) => path == pre || path.startsWith('$pre/'));
     final candidates = <String>{};
@@ -728,13 +738,15 @@ class AppController extends ChangeNotifier {
     }
     var n = 0;
     for (final path in candidates) {
-      if (!isSafePath(path) || pak!.files.containsKey(path)) continue;
+      // מוחקים רק קובץ שהתוכנה הזאת העתיקה לתיקייה הזאת, לא קובץ שהמשתמש שם שם.
+      if (!isSafePath(path) || pak!.files.containsKey(path) || !ledger.owns(path)) continue;
       final f = File(p.joinAll([destDir, ...path.split('/')]));
       try {
         if (await f.exists()) {
           await f.delete();
           n++;
         }
+        ledger.remove(path);
       } catch (_) {}
     }
     return n;

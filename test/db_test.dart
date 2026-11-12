@@ -98,8 +98,14 @@ void main() {
       final target = p.join(tmp.path, 'target.db');
       File(oldDb).copySync(target);
       final d = artifactOf(patch, newDb, fromSha: sha(oldDb), delta: true);
+      for (final sfx in ['-wal', '-shm', '-journal']) {
+        File('$target$sfx').writeAsStringSync('stale');
+      }
       await svc.install(d, mirror, target, onProgress: (_, _, _) {}, isCancelled: () => false);
       expect(sha(target), sha(newDb));
+      for (final sfx in ['-wal', '-shm', '-journal']) {
+        expect(File('$target$sfx').existsSync(), isFalse, reason: sfx);
+      }
       expect(File('$target.new').existsSync(), isFalse);
       expect(File('$target.old').existsSync(), isFalse);
 
@@ -172,6 +178,25 @@ void main() {
       File('$target.old').writeAsStringSync('older');
       await DbService.recoverInterrupted(target);
       expect(File(target).readAsStringSync(), 'old');
+    } finally {
+      d.deleteSync(recursive: true);
+    }
+  });
+
+  test('מחיקת קובצי עזר ישנים של SQLite ליד המסד', () async {
+    final d = Directory.systemTemp.createTempSync('side');
+    try {
+      final db = p.join(d.path, 'x.db');
+      File(db).writeAsStringSync('db');
+      File('$db-wal').writeAsStringSync('w');
+      File('$db-shm').writeAsStringSync('s');
+      File(p.join(d.path, 'other.db-wal')).writeAsStringSync('keep');
+      final gone = await DbService.deleteStaleSidecars(db);
+      expect(gone.length, 2);
+      expect(File(db).existsSync(), isTrue);
+      expect(File('$db-wal').existsSync(), isFalse);
+      expect(File('$db-shm').existsSync(), isFalse);
+      expect(File(p.join(d.path, 'other.db-wal')).existsSync(), isTrue);
     } finally {
       d.deleteSync(recursive: true);
     }
