@@ -231,8 +231,8 @@ class DbService {
           if (have > 0) req.headers.set(HttpHeaders.rangeHeader, 'bytes=$have-');
           final res = await req.close().timeout(const Duration(seconds: 30));
           await ensureOk(res, ok: const {200, 206});
-          if (res.statusCode == 200 && have > 0) {
-            // השרת התעלם מ-Range: מתחילים מחדש.
+          if (have > 0 && !isExactContinuation(res, have)) {
+            // השרת התעלם מ-Range או החזיר טווח אחר: מתחילים מחדש.
             onBytes(-counted);
             counted = 0;
             have = 0;
@@ -262,6 +262,7 @@ class DbService {
         rethrow;
       } catch (e) {
         lastError = e;
+        if (isFinalNetFailure(e)) break; // הקובץ החלקי נשמר, ואין טעם לנסות שוב מיד
         await Future<void>.delayed(Duration(seconds: 2 * (attempt + 1)));
       }
     }

@@ -212,7 +212,10 @@ class RepoService {
           await res.drain<void>(); // כבר הורד במלואו — נבדוק hash למטה.
         } else {
           await ensureOk(res, ok: const {200, 206});
-          if (res.statusCode == 200) have = 0; // השרת התעלם מ-Range
+          if (have > 0 && !isExactContinuation(res, have)) {
+            // השרת התעלם מ-Range או החזיר טווח אחר: ההמשך אינו מדויק, מתחילים מחדש.
+            have = 0;
+          }
           final total = res.contentLength >= 0 ? res.contentLength + have : null;
           final sink = file.openWrite(mode: have > 0 ? FileMode.append : FileMode.write);
           var got = have;
@@ -239,6 +242,7 @@ class RepoService {
         rethrow;
       } catch (e) {
         lastError = e;
+        if (isFinalNetFailure(e)) break; // הקובץ החלקי נשמר, ואין טעם לנסות שוב מיד
         await Future<void>.delayed(Duration(seconds: 2 * (attempt + 1)));
       }
     }

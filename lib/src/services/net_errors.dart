@@ -70,3 +70,20 @@ NetErrorKind kindOf(Object e) {
   if (e is TimeoutException) return NetErrorKind.busy;
   return NetErrorKind.other;
 }
+
+/// מפרש כותרת Content-Range ("bytes 100-199/200"). מחזיר את נקודת ההתחלה, או null אם אינה תקינה.
+int? contentRangeStart(String? header) {
+  if (header == null) return null;
+  final m = RegExp(r'^\s*bytes\s+(\d+)-(\d+)/(\d+|\*)\s*$', caseSensitive: false).firstMatch(header);
+  return m == null ? null : int.parse(m.group(1)!);
+}
+
+/// האם תגובת 206 היא בדיוק ההמשך שביקשנו מהבית [have].
+bool isExactContinuation(HttpClientResponse res, int have) =>
+    res.statusCode == 206 && contentRangeStart(res.headers.value(HttpHeaders.contentRangeHeader)) == have;
+
+/// כשל שאין טעם לנסות שוב מיד (חסימה, הגבלת קצב).
+bool isFinalNetFailure(Object e) {
+  final k = kindOf(e);
+  return k == NetErrorKind.blocked || k == NetErrorKind.rateLimit;
+}

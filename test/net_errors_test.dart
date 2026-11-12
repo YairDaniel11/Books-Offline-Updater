@@ -52,4 +52,19 @@ void main() {
     expect((await run('/rate') as NetFailure).kind, NetErrorKind.rateLimit);
     expect(await run('/ok'), isNull);
   });
+
+  test('Content-Range: המשך מדויק בלבד', () {
+    expect(contentRangeStart('bytes 100-199/200'), 100);
+    expect(contentRangeStart('bytes 0-9/*'), 0);
+    expect(contentRangeStart('bytes */200'), isNull);
+    expect(contentRangeStart(null), isNull);
+    expect(contentRangeStart('garbage'), isNull);
+  });
+
+  test('כשלים סופיים: חסימה והגבלת קצב אינם נוסו שוב', () {
+    expect(isFinalNetFailure(classifyHttp(403)), isTrue);
+    expect(isFinalNetFailure(classifyHttp(429)), isTrue);
+    expect(isFinalNetFailure(classifyHttp(503)), isFalse);
+    expect(isFinalNetFailure(const SocketException('x')), isFalse);
+  });
 }
