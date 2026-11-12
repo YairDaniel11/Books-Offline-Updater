@@ -14,13 +14,19 @@ class _ListSink implements Sink<List<int>> {
   void close() {}
 }
 
-/// נתיב יחסי בטוח בתוך zip: בלי "..", נתיב מוחלט, backslash או אות כונן (הגנה מפני zip-slip).
-bool isSafeZipName(String name) {
-  if (name.isEmpty || name.startsWith('/') || name.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(name)) return false;
-  return name.split('/').every((s) => s != '..' && s != '.' && !s.contains('\u0000'));
+/// נתיב יחסי בטוח בתוך zip (ראו [safeZipPath]); backslash נחשב מפריד.
+bool isSafeZipName(String name) => safeZipPath(name) != null;
+
+/// CRC32 של קובץ קיים, בסטרימינג.
+Future<int> _fileCrc(File f) async {
+  var crc = 0;
+  await for (final c in f.openRead()) {
+    crc = Crc32.update(crc, c);
+  }
+  return crc;
 }
 
-/// מחלץ את כל קבצי [zipPath] אל [destDir] (נוצר לפי הצורך), עם אימות CRC. קבצים קיימים באותו גודל מדולגים.
+/// מחלץ את כל קבצי [zipPath] אל [destDir] (נוצר לפי הצורך), עם אימות CRC. קבצים קיימים באותו גודל ו-CRC מדולגים.
 /// מחזיר את מספר הקבצים שנכתבו.
 Future<int> extractZipTo(
   String zipPath,
@@ -35,11 +41,12 @@ Future<int> extractZipTo(
     var done = 0;
     for (final e in list) {
       if (isCancelled?.call() ?? false) break;
-      if (!isSafeZipName(e.name)) throw FormatException('שם קובץ לא בטוח בארכיון: ${e.name}');
+      final safe = safeZipPath(e.name);
+      if (safe == null) throw FormatException('שם קובץ לא בטוח בארכיון: ${e.name}');
       if (e.method != 0 && e.method != 8) throw FormatException('שיטת דחיסה לא נתמכת בקובץ ${e.name}');
-      final target = p.joinAll([destDir, ...e.name.split('/')]);
+      final target = p.joinAll([destDir, ...safe.split('/')]);
       final out = File(target);
-      if (await out.exists() && await out.length() == e.size) {
+      if (await out.exists() && await out.length() == e.size && await _fileCrc(out) == e.crc) {
         onProgress?.call(++done, list.length);
         continue;
       }

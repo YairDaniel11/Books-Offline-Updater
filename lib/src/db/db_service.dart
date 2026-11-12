@@ -425,6 +425,17 @@ class DbService {
     }
   }
 
+  /// התאוששות מהפסקה (קריסה, כיבוי) בין "יעד ← .old" ל-".new ← יעד" בהחלפת המסד:
+  /// אם אין קובץ יעד אבל יש `.old`, מחזירים אותו. מנקים גם `.new` שנשאר.
+  static Future<void> recoverInterrupted(String target) async {
+    try {
+      final old = File('$target.old');
+      if (!await File(target).exists() && await old.exists()) await old.rename(target);
+      final nw = File('$target.new');
+      if (await nw.exists()) await nw.delete();
+    } catch (_) {}
+  }
+
   Future<ZstdResult> _concat(
     List<String> sources,
     String dest,
