@@ -181,6 +181,112 @@ class DbService {
     return s.present == s.total;
   }
 
+  /// שם קובץ המסד הגולמי (לא דחוס) בתיקיית המראה: נגזר מה-SHA-256 של המסד, כך שאי אפשר לטעות בגרסה.
+  static String rawDbFileName(DbArtifact a) => '$dbLibraryId-${a.sha256.substring(0, 12)}.db';
+
+  /// קובץ מסד גולמי בתיקיית המראה שגודלו תואם למסד המלא (האימות המלא נעשה בהתקנה), או `null`.
+  static File? rawFullFile(DbArtifact a, String dir) {
+    if (a.isDelta) return null;
+    final f = File(p.join(dir, rawDbFileName(a)));
+    try {
+      return f.existsSync() && f.lengthSync() == a.size ? f : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// המסד המלא זמין בתיקייה: בחלקים (דחוס/לא דחוס) או כקובץ מסד גולמי.
+  static bool fullAvailable(DbArtifact a, String dir) => isComplete(a, dir) || rawFullFile(a, dir) != null;
+
+  /// ייצוג של קובץ מסד גולמי כ"חלק יחיד לא דחוס", כדי לעבור את אותו מסלול אימות והתקנה.
+  static DbArtifact _rawAsArtifact(DbArtifact a) => DbArtifact(
+        compression: 'none',
+        size: a.size,
+        sha256: a.sha256,
+        parts: [DbPart(url: 'https://raw.local/${rawDbFileName(a)}', size: a.size, sha256: a.sha256)],
+      );
+
+  /// הודעה ידידותית לשגיאת כתיבה/העתקה לכונן חיצוני.
+  static String friendlyCopyError(Object e) {
+    if (e is DbException) return e.message;
+    if (e is FileSystemException) {
+      final code = e.osError?.errorCode;
+      final t = e.toString();
+      if (code == 112 || code == 28 || t.contains('No space left') || t.contains('not enough space')) {
+        return 'אין מספיק מקום פנוי בדיסק און קי. פנו מקום או בחרו כונן אחר.';
+      }
+      if (const {2, 3, 6, 21, 55, 59, 121, 1117, 1167}.contains(code)) {
+        return 'הכונן לא זמין. ייתכן שהדיסק און קי הוצא. חברו אותו שוב ונסו שוב.';
+      }
+      if (code == 5 || code == 13 || code == 19 || code == 30 || code == 1 || t.contains('denied')) {
+        return 'אי אפשר לכתוב בתיקייה שנבחרה (ייתכן שהכונן מוגן מפני כתיבה). בחרו תיקייה אחרת.';
+      }
+      return 'ההעתקה נכשלה: ${e.message}';
+    }
+    return 'ההעתקה נכשלה: $e';
+  }
+
+  /// מעתיק מסד גולמי מעודכן לתיקיית מראה ביעד ([destDir]) ויוצר שם מניפסט חתום, כך שההתקנה במחשב השני
+  /// (העתקה מהכונן) תזהה אותו. כותב לשם זמני, מאמת SHA-256 ורק אז משנה שם. קובץ זהה שכבר שם לא נכתב מחדש.
+  /// המניפסט נכתב אחרון.
+  Future<void> copyRawDb(
+    DbRelease release,
+    String srcPath,
+    String destDir, {
+    required ProgressCallback onProgress,
+    required bool Function() isCancelled,
+  }) async {
+    final a = release.manifest.full;
+    final name = rawDbFileName(a);
+    final dest = File(p.join(destDir, name));
+    final tmp = File('${dest.path}.part');
+    final src = File(srcPath);
+    if (!await src.exists()) throw DbException('קובץ המסד לא נמצא: $srcPath');
+    if (await src.length() != a.size) throw DbException('קובץ המסד אינו תואם לגרסה העדכנית.');
+    try {
+      await Directory(destDir).create(recursive: true);
+      var have = false;
+      if (await dest.exists()) {
+        if (await dest.length() == a.size &&
+            await sha256File(dest.path,
+                    onProgress: (d, t) => onProgress(d, t, 'בודק את הקובץ שכבר בכונן'), isCancelled: isCancelled) ==
+                a.sha256) {
+          have = true;
+        }
+      }
+      if (!have) {
+        final total = a.size * 2;
+        var done = 0;
+        final out = tmp.openWrite();
+        try {
+          await for (final c in src.openRead()) {
+            if (isCancelled()) throw DownloadCancelled();
+            out.add(c);
+            done += c.length;
+            onProgress(done, total, 'מעתיק את המסד');
+          }
+          await out.flush();
+        } finally {
+          await out.close();
+        }
+        final sha = await sha256File(
+          tmp.path,
+          onProgress: (d, t) => onProgress(a.size + d, total, 'בודק שההעתקה תקינה'),
+          isCancelled: isCancelled,
+        );
+        if (sha != a.sha256) throw DbException('ההעתקה לא עברה בדיקת תקינות. נסו שוב, או בחרו כונן אחר.');
+        if (await dest.exists()) await dest.delete();
+        await tmp.rename(dest.path);
+      }
+      await _writeAtomic(File(p.join(destDir, manifestFileName)), release.manifestBytes);
+      await _writeAtomic(File(p.join(destDir, manifestSigFileName)), utf8.encode(release.signature));
+    } finally {
+      try {
+        if (await tmp.exists()) await tmp.delete();
+      } catch (_) {}
+    }
+  }
+
   static Future<String> sha256OfFile(
     String path, {
     void Function(int done, int total)? onProgress,
@@ -348,6 +454,10 @@ class DbService {
     required ProgressCallback onProgress,
     required bool Function() isCancelled,
   }) async {
+    // מסד מלא שקיים בתיקייה כקובץ גולמי (הועתק לדיסק און קי): מותקן באותו מסלול, עם אותן בדיקות SHA-256.
+    if (!artifact.isDelta && !isComplete(artifact, mirrorDir) && rawFullFile(artifact, mirrorDir) != null) {
+      artifact = _rawAsArtifact(artifact);
+    }
     final sources = [for (final part in artifact.parts) partPath(mirrorDir, part)];
     for (final part in artifact.parts) {
       final f = File(partPath(mirrorDir, part));
