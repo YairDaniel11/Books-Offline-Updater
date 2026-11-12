@@ -6,7 +6,7 @@ import '../theme/app_tokens.dart';
 import '../widgets/info_icon.dart';
 import 'library_screen.dart';
 
-/// ספרים בודדים בפורמט TXT: בחירה והורדה של ספרים מסוימים. החילוץ למחשב נמצא בלשונית "העתקת הספרים".
+/// ספרים בודדים (קבצי טקסט): בחירה והורדה של ספרים מסוימים. החילוץ למחשב נמצא במסך "העתקה מהכונן".
 /// מסומן במפורש כדרך שאינה הפשוטה; הדרך המומלצת היא מסד הספרים.
 class TxtBooksScreen extends StatefulWidget {
   const TxtBooksScreen({super.key, required this.controller, required this.onGoDb});
@@ -40,12 +40,12 @@ class _TxtBooksScreenState extends State<TxtBooksScreen> {
                   const SizedBox(width: AppTokens.spaceSM),
                   Expanded(
                     child: Text(
-                      'זו אינה הדרך הפשוטה. החלק הזה מתאים למי שרוצה ספר מסוים בלבד, בפורמט TXT. '
+                      'זו אינה הדרך הפשוטה. החלק הזה מתאים למי שרוצה ספר מסוים בלבד, כקובץ טקסט. '
                       'לרוב המשתמשים מומלץ מסד הספרים.',
                       style: TextStyle(color: cs.onTertiaryContainer),
                     ),
                   ),
-                  TextButton(onPressed: widget.onGoDb, child: const Text('למסד הספרים')),
+                  TextButton(onPressed: widget.onGoDb, child: const Text('לדף הבית')),
                 ]),
               ),
             ),
@@ -74,8 +74,8 @@ class _TxtBooksScreenState extends State<TxtBooksScreen> {
                         icon: const Icon(FluentIcons.arrow_download_24_regular),
                         label: const Text('הורד את כל הספרים'),
                       ),
-                      const InfoIcon('הורדת כל הספרים בפורמט TXT לקובץ אחד (קובץ המאגר), שאפשר לחלץ ממנו אחר כך. '
-                          'אם צריך ספר אחד בלבד, בחרו אותו מהרשימה. להעתקה למחשב אחר: לשונית "העתקת הספרים".'),
+                      const InfoIcon('הורדת כל הספרים כקבצי טקסט לקובץ אחד (קובץ המאגר), שאפשר לחלץ ממנו אחר כך. '
+                          'אם צריך ספר אחד בלבד, בחרו אותו מהרשימה. להעתקה למחשב אחר: מסך "העתקה מהכונן".'),
                   ],
                 ),
               ),
