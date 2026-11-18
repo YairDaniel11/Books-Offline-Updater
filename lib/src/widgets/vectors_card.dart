@@ -72,8 +72,9 @@ class VectorsCard extends StatelessWidget {
                     child: Text(vectors.preparedComplete ? 'הוקטורים מוכנים' : 'הורדת הוקטורים'),
                   ),
                 ),
-                if (vectors.preparedComplete) ...[
+                if (vectors.canCopy) ...[
                   const SizedBox(height: AppTokens.spaceXS),
+                  if (vectors.externalDir != null) Text('מקור ההעתקה: ${vectors.externalDir}', style: muted),
                   Align(
                     alignment: AlignmentDirectional.centerStart,
                     child: FilledButton(
@@ -94,6 +95,22 @@ class VectorsCard extends StatelessWidget {
                         if (d != null) await vectors.prepare(folder: d);
                       },
                       child: const Text('הורדה ישירה לדיסק און קי'),
+                    ),
+                  ),
+                ],
+                if (!vectors.preparedComplete) ...[
+                  const SizedBox(height: AppTokens.spaceXS),
+                  Text('יש לך את הקובץ כבר, בתיקייה אחרת?', style: muted),
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: OutlinedButton(
+                      onPressed: vectors.busy
+                          ? null
+                          : () async {
+                              final d = await FilePicker.getDirectoryPath(dialogTitle: 'בחירת התיקייה שבה נמצא קובץ הוקטורים (.oxv.zst)');
+                              if (d != null) vectors.useSourceFolder(d);
+                            },
+                      child: const Text('בחירת תיקייה עם הוקטורים'),
                     ),
                   ),
                 ],

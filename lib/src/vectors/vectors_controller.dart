@@ -196,11 +196,46 @@ class VectorsController extends ChangeNotifier {
   }
 
   /// מעתיק את הוקטורים שכבר הורדו (בתיקיית המראה) לדיסק און קי, בלי להוריד שוב.
+  /// חבילה שנבחרה ידנית מתיקייה אחרת (כשהוקטורים לא נמצאים בתיקיית המראה).
+  VectorsRelease? externalRelease;
+  String? externalDir;
+
+  /// מקור ההעתקה: תיקייה שנבחרה ידנית, ואחרת תיקיית המראה.
+  VectorsRelease? get copyRelease => externalRelease ?? (preparedComplete ? mirror : null);
+  String get copyDir => externalRelease != null ? externalDir! : _db.mirrorDir;
+  bool get canCopy => copyRelease != null;
+
+  /// בחירת תיקייה שיש בה את קובץ הוקטורים. בלי מניפסט בתיקייה משתמשים במניפסט מהרשת (אם יש חיבור).
+  /// תקינות הקובץ נבדקת (sha256) בזמן ההעתקה.
+  void useSourceFolder(String dir) {
+    VectorsRelease? rel;
+    try {
+      rel = VectorsService.readMirror(dir);
+    } catch (e) {
+      _msg(e is VectorsException ? e.message : '$e', error: true);
+      return;
+    }
+    rel ??= remote;
+    if (rel == null) {
+      _msg('בתיקייה אין מניפסט של הוקטורים, ואין כרגע חיבור לרשת כדי להשלים אותו. הכניסו לתיקייה גם את הקבצים '
+          'vectors-manifest.json ו-vectors-manifest.json.sig.', error: true);
+      return;
+    }
+    if (!VectorsService.isComplete(rel.manifest, dir)) {
+      _msg('בתיקייה שנבחרה לא נמצא הקובץ ${rel.manifest.files.first.file} (או שהוא חלקי).', error: true);
+      return;
+    }
+    externalRelease = rel;
+    externalDir = dir;
+    message = null;
+    notifyListeners();
+  }
+
   Future<void> copyToDrive(String folder) async {
-    final r = mirror;
-    if (r == null || !preparedComplete || busy) return;
+    final r = copyRelease;
+    if (r == null || busy) return;
     final dest = p.basename(folder) == dbMirrorDirName ? folder : p.join(folder, dbMirrorDirName);
-    if (p.equals(p.normalize(dest), p.normalize(_db.mirrorDir))) {
+    if (p.equals(p.normalize(dest), p.normalize(copyDir))) {
       _msg('זו אותה תיקייה שבה הוקטורים כבר נמצאים. בחרו את הדיסק און קי.', error: true);
       return;
     }
@@ -216,7 +251,7 @@ class VectorsController extends ChangeNotifier {
     activity = DbActivity('מעתיק את הוקטורים לדיסק און קי');
     notifyListeners();
     try {
-      await VectorsService.copyPackage(r, _db.mirrorDir, dest, onProgress: _progress, isCancelled: () => _cancel);
+      await VectorsService.copyPackage(r, copyDir, dest, onProgress: _progress, isCancelled: () => _cancel);
       _msg('הוקטורים הועתקו אל: $dest');
     } on DownloadCancelled {
       _msg('ההעתקה נעצרה. לא נשאר קובץ חלקי.');
