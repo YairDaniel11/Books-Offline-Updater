@@ -43,7 +43,12 @@ class VectorsCard extends StatelessWidget {
                   ]),
                 ),
               if (a != null) ...[
-                Text(a.title, style: theme.textTheme.titleMedium),
+                Row(children: [
+                  Expanded(child: Text(a.title, style: theme.textTheme.titleMedium)),
+                  if (a.progress != null)
+                    Text('${(a.progress! * 100).toStringAsFixed(1)}%',
+                        style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+                ]),
                 if (a.detail.isNotEmpty) Text(a.detail, maxLines: 1, overflow: TextOverflow.ellipsis, style: muted),
                 const SizedBox(height: AppTokens.spaceSM),
                 LinearProgressIndicator(value: a.progress, minHeight: 10),

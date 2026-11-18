@@ -163,7 +163,13 @@ class VectorsController extends ChangeNotifier {
     activity = DbActivity('מוריד את וקטורי החיפוש');
     notifyListeners();
     try {
-      await _service.download(r, _db.mirrorDir, onProgress: _progress, isCancelled: () => _cancel);
+      await _service.download(
+        r,
+        _db.mirrorDir,
+        onProgress: (d, t, name) => _progress(
+            d, t, t == null ? name : '${DbController.formatBytes(d)} מתוך ${DbController.formatBytes(t)}'),
+        isCancelled: () => _cancel,
+      );
       _msg('וקטורי החיפוש הורדו (למסד גרסה ${r.manifest.dbVersion}). הקבצים בתיקייה: ${_db.mirrorDir}');
     } on DownloadCancelled {
       _msg('ההורדה נעצרה. בהורדה חוזרת היא תתחיל מההתחלה (השרת לא תומך בהמשך).');
