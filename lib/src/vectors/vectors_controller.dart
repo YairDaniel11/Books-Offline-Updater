@@ -18,7 +18,9 @@ const vectorsCredit = 'וקטורי החיפוש מבוססים על המודל 
 
 /// הכנה (הורדה) והתקנה של וקטורי החיפוש-לפי-משמעות של ספרי המאגר.
 class VectorsController extends ChangeNotifier {
-  VectorsController(this._db);
+  VectorsController(this._db) {
+    _db.addListener(_onDb);
+  }
 
   final DbController _db;
   final VectorsService _service = VectorsService();
@@ -39,6 +41,15 @@ class VectorsController extends ChangeNotifier {
   List<String> installedSegments = [];
 
   bool get busy => activity != null;
+
+  String? _seenMirrorDir;
+
+  /// תיקיית החבילה השתנתה (בחירה ידנית, דיסק און קי): קוראים מחדש את הוקטורים שבה.
+  void _onDb() {
+    if (_seenMirrorDir == _db.mirrorDir) return;
+    _seenMirrorDir = _db.mirrorDir;
+    refreshMirror();
+  }
 
   File get _file => File(p.join(AppPaths.userConfigDir(), 'vectors_settings.json'));
 
@@ -139,7 +150,8 @@ class VectorsController extends ChangeNotifier {
 
   // ─── הכנה (מחובר) ─────────────────────────────────────────────────
 
-  Future<void> prepare() async {
+  /// [folder]: תיקייה חיצונית (דיסק און קי); הקבצים נשמרים בה בתוך `OtzariaDbMirror`. בלי: תיקיית המראה הרגילה.
+  Future<void> prepare({String? folder}) async {
     final r = remote;
     if (r == null || busy) return;
     if (_db.remote == null) {
@@ -151,7 +163,10 @@ class VectorsController extends ChangeNotifier {
       _msg(mismatch, error: true);
       return;
     }
-    final free = await freeDiskSpace(p.join(_db.mirrorDir, 'x'));
+    final dest = folder == null
+        ? _db.mirrorDir
+        : (p.basename(folder) == dbMirrorDirName ? folder : p.join(folder, dbMirrorDirName));
+    final free = await freeDiskSpace(p.join(dest, 'x'));
     final need = r.manifest.downloadSize + 64 * 1024 * 1024;
     if (free != null && free < need) {
       _msg('אין מספיק מקום פנוי. דרושים כ-${DbController.formatBytes(need)}, ופנויים ${DbController.formatBytes(free)}.',
@@ -165,12 +180,12 @@ class VectorsController extends ChangeNotifier {
     try {
       await _service.download(
         r,
-        _db.mirrorDir,
+        dest,
         onProgress: (d, t, name) => _progress(
             d, t, t == null ? name : '${DbController.formatBytes(d)} מתוך ${DbController.formatBytes(t)}'),
         isCancelled: () => _cancel,
       );
-      _msg('וקטורי החיפוש הורדו (למסד גרסה ${r.manifest.dbVersion}). הקבצים בתיקייה: ${_db.mirrorDir}');
+      _msg('וקטורי החיפוש הורדו (למסד גרסה ${r.manifest.dbVersion}). הקבצים בתיקייה: $dest');
     } on DownloadCancelled {
       _msg('ההורדה נעצרה. בהורדה חוזרת היא תתחיל מההתחלה (השרת לא תומך בהמשך).');
     } catch (e) {
@@ -247,6 +262,7 @@ class VectorsController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _db.removeListener(_onDb);
     _service.close();
     super.dispose();
   }

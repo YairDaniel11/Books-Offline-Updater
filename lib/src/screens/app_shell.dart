@@ -175,7 +175,7 @@ class _AppShellState extends State<AppShell> {
       HomeScreen(controller: c, db: _db, onNavigate: _goTo),
       DbScreen(db: _db, app: c, vectors: _vectors),
       TxtBooksScreen(controller: c, onGoDb: () => _goTo(Tabs.home)),
-      CopyScreen(db: _db, app: c, locked: _locked),
+      CopyScreen(db: _db, app: c, locked: _locked, vectors: _vectors),
       SettingsScreen(controller: c, update: _update, onLockNow: _lockNow),
       PrepareScreen(db: _db, vectors: _vectors),
     ];

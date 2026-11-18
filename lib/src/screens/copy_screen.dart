@@ -9,17 +9,20 @@ import '../controllers/app_controller.dart';
 import '../db/db_controller.dart';
 import '../db/db_manifest.dart' show dbLibraryId;
 import '../theme/app_tokens.dart';
+import '../vectors/vectors_controller.dart';
 import '../widgets/activity_card.dart';
 import '../widgets/app_card.dart';
 import '../widgets/message_banner.dart';
+import '../widgets/vectors_card.dart';
 import 'extract_screen.dart';
 
 /// "העתקת הספרים": המסך של המחשב שאין בו אינטרנט. כפתור אחד גדול שמעתיק את המסד
 /// ישר למקום שבו אוצריא שומרת אותו, עם התקדמות גדולה וברורה מול העיניים.
 class CopyScreen extends StatelessWidget {
-  const CopyScreen({super.key, required this.db, required this.app, required this.locked});
+  const CopyScreen({super.key, required this.db, required this.app, required this.locked, this.vectors});
 
   final DbController db;
+  final VectorsController? vectors;
   final AppController app;
 
   /// כשהתוכנה נעולה מסתירים את האפשרויות שמשנות מיקומים.
@@ -62,6 +65,10 @@ class CopyScreen extends StatelessWidget {
                       onPickNewFolder: _pickNewFolder,
                       onPickMirror: _pickMirror,
                     ),
+                    if (vectors != null) ...[
+                      const SizedBox(height: AppTokens.spaceMD),
+                      VectorsCard(vectors: vectors!, prepare: false),
+                    ],
                     if (app.pakFileCount > 0) ...[
                       const SizedBox(height: AppTokens.spaceMD),
                       _TxtCopyCard(app: app, db: db),
