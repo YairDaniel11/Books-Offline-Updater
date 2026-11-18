@@ -195,6 +195,38 @@ class VectorsController extends ChangeNotifier {
     refreshMirror();
   }
 
+  /// מעתיק את הוקטורים שכבר הורדו (בתיקיית המראה) לדיסק און קי, בלי להוריד שוב.
+  Future<void> copyToDrive(String folder) async {
+    final r = mirror;
+    if (r == null || !preparedComplete || busy) return;
+    final dest = p.basename(folder) == dbMirrorDirName ? folder : p.join(folder, dbMirrorDirName);
+    if (p.equals(p.normalize(dest), p.normalize(_db.mirrorDir))) {
+      _msg('זו אותה תיקייה שבה הוקטורים כבר נמצאים. בחרו את הדיסק און קי.', error: true);
+      return;
+    }
+    final free = await freeDiskSpace(p.join(dest, 'x'));
+    final need = r.manifest.downloadSize + 64 * 1024 * 1024;
+    if (free != null && free < need) {
+      _msg('אין מספיק מקום פנוי בדיסק און קי. דרושים כ-${DbController.formatBytes(need)}, ופנויים ${DbController.formatBytes(free)}.',
+          error: true);
+      return;
+    }
+    message = null;
+    _cancel = false;
+    activity = DbActivity('מעתיק את הוקטורים לדיסק און קי');
+    notifyListeners();
+    try {
+      await VectorsService.copyPackage(r, _db.mirrorDir, dest, onProgress: _progress, isCancelled: () => _cancel);
+      _msg('הוקטורים הועתקו אל: $dest');
+    } on DownloadCancelled {
+      _msg('ההעתקה נעצרה. לא נשאר קובץ חלקי.');
+    } catch (e) {
+      _msg(e is VectorsException ? e.message : 'ההעתקה נכשלה: $e', error: true);
+    }
+    activity = null;
+    notifyListeners();
+  }
+
   // ─── התקנה (אופליין) ──────────────────────────────────────────────
 
   Future<void> install() async {

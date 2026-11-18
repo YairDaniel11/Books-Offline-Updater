@@ -72,7 +72,19 @@ class VectorsCard extends StatelessWidget {
                     child: Text(vectors.preparedComplete ? 'הוקטורים מוכנים' : 'הורדת הוקטורים'),
                   ),
                 ),
-                if (r != null) ...[
+                if (vectors.preparedComplete) ...[
+                  const SizedBox(height: AppTokens.spaceXS),
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: FilledButton(
+                      onPressed: () async {
+                        final d = await FilePicker.getDirectoryPath(dialogTitle: 'בחירת הדיסק און קי (או תיקייה) להעתקת הוקטורים');
+                        if (d != null) await vectors.copyToDrive(d);
+                      },
+                      child: const Text('העתקת הוקטורים לדיסק און קי'),
+                    ),
+                  ),
+                ] else if (r != null) ...[
                   const SizedBox(height: AppTokens.spaceXS),
                   Align(
                     alignment: AlignmentDirectional.centerStart,

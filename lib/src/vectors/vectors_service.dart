@@ -177,6 +177,69 @@ class VectorsService {
     } catch (_) {}
   }
 
+  /// מעתיק חבילה שלמה (קבצים + מניפסט) מ-[srcDir] ל-[destDir] בלי הורדה: כותב ל-.part, מאמת sha256 ורק אז משנה שם.
+  /// קובץ זהה שכבר ביעד לא נכתב מחדש. המניפסט נכתב אחרון.
+  static Future<void> copyPackage(
+    VectorsRelease r,
+    String srcDir,
+    String destDir, {
+    required VProgress onProgress,
+    required bool Function() isCancelled,
+  }) async {
+    final m = r.manifest;
+    await Directory(destDir).create(recursive: true);
+    final total = m.downloadSize * 2;
+    var done = 0;
+    for (final f in m.files) {
+      final src = File(p.join(srcDir, f.file));
+      final dest = File(p.join(destDir, f.file));
+      final tmp = File('${dest.path}.part');
+      if (!await src.exists() || await src.length() != f.size) {
+        throw VectorsException('בתיקיית המקור חסר או חלקי הקובץ ${f.file}');
+      }
+      try {
+        if (await dest.exists() && await dest.length() == f.size) {
+          final same = await sha256File(dest.path, isCancelled: isCancelled) == f.sha256;
+          if (same) {
+            done += f.size * 2;
+            onProgress(done, total, f.file);
+            continue;
+          }
+        }
+        final out = tmp.openWrite();
+        try {
+          await for (final c in src.openRead()) {
+            if (isCancelled()) throw DownloadCancelled();
+            out.add(c);
+            done += c.length;
+            onProgress(done, total, 'מעתיק');
+          }
+          await out.flush();
+        } finally {
+          await out.close();
+        }
+        final sha = await sha256File(tmp.path,
+            onProgress: (d, _) => onProgress(done + d, total, 'בודק שההעתקה תקינה'), isCancelled: isCancelled);
+        if (sha != f.sha256) throw VectorsException('ההעתקה לא עברה בדיקת תקינות. נסו שוב, או בחרו כונן אחר.');
+        done += f.size;
+        if (await dest.exists()) await dest.delete();
+        await tmp.rename(dest.path);
+      } finally {
+        try {
+          if (await tmp.exists()) await tmp.delete();
+        } catch (_) {}
+      }
+    }
+    await _writeAtomicStatic(File(p.join(destDir, vectorsManifestFileName)), r.bytes);
+    await _writeAtomicStatic(File(p.join(destDir, vectorsSigFileName)), utf8.encode(r.signature));
+  }
+
+  static Future<void> _writeAtomicStatic(File f, List<int> bytes) async {
+    final tmp = File('${f.path}.tmp');
+    await tmp.writeAsBytes(bytes, flush: true);
+    await tmp.rename(f.path);
+  }
+
   Future<void> _writeAtomic(File f, List<int> bytes) async {
     final tmp = File('${f.path}.tmp');
     await tmp.writeAsBytes(bytes, flush: true);
