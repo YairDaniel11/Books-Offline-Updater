@@ -77,6 +77,52 @@ class OtzariaLocator {
     return _exclusive(() => _readPath(dir));
   }
 
+  /// תיקיית הוקטורים של אוצריא (`<ההורה של ספריית הספרים>\vectors`), רק אם יש בה סט (CURRENT).
+  /// סדר הגילוי: `key-library-path` בהגדרות, אחר כך `library_path.txt`, אחר כך `<data>\books`.
+  static Future<String?> findVectorsDir({String? root}) async {
+    final dir = root ?? dataRoot();
+    if (dir == null) return null;
+    final libs = <String>[];
+    final fromHive = await _exclusive(() => _readString(dir, 'key-library-path'));
+    if (fromHive != null && fromHive.isNotEmpty) libs.add(fromHive);
+    try {
+      final f = File(p.join(dir, 'library_path.txt'));
+      if (await f.exists()) {
+        final t = (await f.readAsString()).trim();
+        if (t.isNotEmpty) libs.add(t);
+      }
+    } catch (_) {}
+    libs.add(p.join(dir, 'books'));
+    for (final lib in libs) {
+      final v = p.join(p.dirname(p.normalize(lib)), 'vectors');
+      if (File(p.join(v, 'CURRENT')).existsSync()) return v;
+    }
+    return null;
+  }
+
+  static Future<String?> _readString(String dir, String key) async {
+    Directory? scratch;
+    Box<dynamic>? box;
+    try {
+      scratch = await Directory.systemTemp.createTemp('otzaria-settings-');
+      final name = '$_boxName-${_counter++}';
+      await File(p.join(dir, _boxFile)).copy(p.join(scratch.path, '$name.hive'));
+      Hive.init(scratch.path);
+      box = await Hive.openBox<dynamic>(name, path: scratch.path);
+      final v = box.get(key);
+      return v is String ? v : null;
+    } catch (_) {
+      return null;
+    } finally {
+      try {
+        await box?.close();
+      } catch (_) {}
+      try {
+        await scratch?.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
   /// קריאה מעותק של הקופסה (בתוך התור הקיים).
   static Future<String?> _readPath(String dir) async {
     Directory? scratch;

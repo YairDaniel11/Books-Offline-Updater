@@ -1,3 +1,4 @@
+import '../vectors/vectors_controller.dart';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:file_picker/file_picker.dart';
@@ -35,6 +36,7 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _index = Tabs.home;
   late final DbController _db = DbController(widget.controller);
+  late final VectorsController _vectors = VectorsController(_db);
   bool _dbStarted = false;
 
   /// נעול: רק מסך העתקת הספרים, בלי סרגל הצד, עד הקלדת הסיסמה.
@@ -94,6 +96,7 @@ class _AppShellState extends State<AppShell> {
   void dispose() {
     _lifecycle.dispose();
     _update.dispose();
+    _vectors.dispose();
     _db.dispose();
     super.dispose();
   }
@@ -165,16 +168,16 @@ class _AppShellState extends State<AppShell> {
               StartScreen.db => Tabs.db,
               StartScreen.copy => Tabs.copy,
             };
-      WidgetsBinding.instance.addPostFrameCallback((_) => _db.init());
+      WidgetsBinding.instance.addPostFrameCallback((_) => _db.init().then((_) => _vectors.init()));
     }
 
     final screens = <Widget>[
       HomeScreen(controller: c, db: _db, onNavigate: _goTo),
-      DbScreen(db: _db, app: c),
+      DbScreen(db: _db, app: c, vectors: _vectors),
       TxtBooksScreen(controller: c, onGoDb: () => _goTo(Tabs.home)),
       CopyScreen(db: _db, app: c, locked: _locked),
       SettingsScreen(controller: c, update: _update, onLockNow: _lockNow),
-      PrepareScreen(db: _db),
+      PrepareScreen(db: _db, vectors: _vectors),
     ];
 
     final isHome = _index == Tabs.home;

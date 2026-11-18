@@ -4,15 +4,18 @@ import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 
 import '../db/db_controller.dart';
 import '../theme/app_tokens.dart';
+import '../vectors/vectors_controller.dart';
 import '../widgets/db_job_panel.dart';
+import '../widgets/vectors_card.dart';
 
 enum _Source { none, version, copy }
 
 /// הכנת קבצים למחשב בלי אינטרנט: שואלים "מה יש במחשב השני?" ומורידים רק את מה שחסר לו.
 class PrepareScreen extends StatefulWidget {
-  const PrepareScreen({super.key, required this.db});
+  const PrepareScreen({super.key, required this.db, this.vectors});
 
   final DbController db;
+  final VectorsController? vectors;
 
   @override
   State<PrepareScreen> createState() => _PrepareScreenState();
@@ -173,6 +176,10 @@ class _PrepareScreenState extends State<PrepareScreen> {
                               style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                         ],
                       ],
+                    ],
+                    if (widget.vectors != null) ...[
+                      const SizedBox(height: AppTokens.spaceMD),
+                      VectorsCard(vectors: widget.vectors!, prepare: true),
                     ],
                   ],
                 ),

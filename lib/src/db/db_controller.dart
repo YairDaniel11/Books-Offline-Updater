@@ -157,6 +157,16 @@ class DbController extends ChangeNotifier {
     await checkRemote();
   }
 
+  /// SHA-256 של קובץ המסד ב-[path] (מהמטמון כשהקובץ לא השתנה), לבדיקת התאמה לוקטורים.
+  Future<String?> installedDbSha(String path, {void Function(int done, int total)? onProgress, bool Function()? isCancelled}) async {
+    if (!await File(path).exists()) return null;
+    final cached = await _cachedSha(path);
+    if (cached != null) return cached;
+    final sha = await DbService.sha256OfFile(path, onProgress: onProgress, isCancelled: isCancelled);
+    await _rememberSha(path, sha);
+    return sha;
+  }
+
   Future<void> _save() async {
     try {
       await _settingsFile.parent.create(recursive: true);

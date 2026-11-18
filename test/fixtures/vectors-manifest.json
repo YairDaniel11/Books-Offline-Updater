@@ -1,0 +1,56 @@
+{
+  "format": "otzarya-unofficial-books-vectors",
+  "formatVersion": 1,
+  "kind": "supplement",
+  "identityDigest": "a31f76271e9979e11f72685b9ced3287a6ddb2013f3c666f090ea71802d692cc",
+  "codecParamsSha256": "4408dd9c691b6ae957f2b0b25ad9fedb47d415838f6f0a5d5167020c4f7a785f",
+  "family": "otzaria/Meivin-Embed-QA491-native256",
+  "requires": {
+    "indexSchemaVersion": 5,
+    "keyVersion": 1,
+    "lineTextVersion": 4
+  },
+  "dedupAgainst": {
+    "repository": "Otzaria/SeforimLibrary",
+    "tag": "vectors-qa491-windows-v38-20261112163847",
+    "libraryVersion": 38,
+    "segmentId": "13b6f96b54d5114df13ce2c820923bc5",
+    "segmentSha256": "9056241509c33e8a95878829753817eab32852a0c42d319a0ebcdc0efddf1ded"
+  },
+  "segment": {
+    "id": "3f09b86c3f9417b6b9836ac585e11a91",
+    "sha256": "9cd86317c06b09187a1a1d1272c1c7086c021cb51c3626cca988cff1c9b31796",
+    "size": 1294656480,
+    "slots": 6070701,
+    "books": 3372,
+    "tag": "v38-20261112163847"
+  },
+  "compression": "zstd",
+  "parts": 0,
+  "files": [
+    {
+      "file": "otzarya-books-vectors-a31f7627-3f09b86c3f94.oxv.zst",
+      "size": 1100773118,
+      "sha256": "b95ea67dcc704bb7c16eb337291b7b1e54e0a5cad204f94ae803635e466ffeab"
+    }
+  ],
+  "db": {
+    "version": 51,
+    "libraryId": "otzarya-unofficial-books",
+    "slug": "otzarya-unofficial-books",
+    "sha256": "c9b61d46741b85414ee2497b176940713adc6ddf8584e1e731ac1718639be28e",
+    "bookKeys": "db:otzarya-unofficial-books:<book.id>"
+  },
+  "source": {
+    "repository": "YairDaniel11/Otzarya-Unofficial-Books",
+    "commit": "604beda59360ad48ee704b5185cd77f9fa24b951"
+  },
+  "builtBy": {
+    "workflow": "build-vectors",
+    "runId": "44238232501",
+    "scriptSha256": "5a37b955ee07f46c00dc6bfeb83da72567b219678995fd1b1efa65a3e247c842",
+    "adapterSha256": "47147e6f2427bc9de93f2fce9f308e79a910b2060df2631eac857aecb4b8f9d4"
+  },
+  "createdAt": "2026-11-18T07:40:26Z",
+  "notice": "וקטורים לספרי המאגר שאינם בסט הרשמי. נבנו במודל של אוצריא (רישיון אישי בלבד); ראו README."
+}

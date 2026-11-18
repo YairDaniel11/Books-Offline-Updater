@@ -11,15 +11,18 @@ import '../db/db_manifest.dart';
 import '../db/db_service.dart';
 import '../theme/app_tokens.dart';
 import '../widgets/app_card.dart';
+import '../vectors/vectors_controller.dart';
 import '../widgets/info_icon.dart';
+import '../widgets/vectors_card.dart';
 
 const _defaultDbFileName = 'otzarya-unofficial-books.db';
 
 /// "אפשרויות מסד הספרים": מיקום המסד, ש"ס וגשל ופרטים למתקדמים. ההכנה למחשב בלי אינטרנט במסך נפרד.
 class DbScreen extends StatelessWidget {
-  const DbScreen({super.key, required this.db, required this.app});
+  const DbScreen({super.key, required this.db, required this.app, this.vectors});
 
   final DbController db;
+  final VectorsController? vectors;
   final AppController app;
 
   Future<void> _pickMirror() async {
@@ -63,6 +66,10 @@ class DbScreen extends StatelessWidget {
                     const SizedBox(height: AppTokens.spaceMD),
                     _ShasCard(db: db, app: app),
                     const SizedBox(height: AppTokens.spaceMD),
+                    if (vectors != null) ...[
+                      VectorsCard(vectors: vectors!, prepare: false),
+                      const SizedBox(height: AppTokens.spaceMD),
+                    ],
                     _TechnicalDetails(db: db, onPickMirror: _pickMirror),
                   ],
                 ),
