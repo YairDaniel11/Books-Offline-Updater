@@ -23,10 +23,16 @@ enum QuickAction { download, update, install }
 /// של עד [stepsBack] הגרסאות האחרונות. במחשב בלי רשת: בלחיצה מעדכן את המסד מהכונן, ובפעם הראשונה
 /// מתקין אותו במיקום שהמשתמש בוחר.
 class QuickUpdateController extends ChangeNotifier {
+  /// [freeSpace]: בדיקת מקום פנוי בכונן (מוזרק בבדיקות, כדי לא להריץ תהליך חיצוני).
   /// [findOtzariaDb]: איפה אוצריא קוראת את המסד (מוזרק בבדיקות, כדי לא לקרוא את אוצריא של המחשב).
-  QuickUpdateController({required this.mirrorDir, DbController? db, Future<String?> Function()? findOtzariaDb})
-    : db = db ?? DbController(AppController()..dataDir = p.dirname(mirrorDir)),
-      _findOtzariaDb = findOtzariaDb ?? OtzariaLocator.findDbPath {
+  QuickUpdateController({
+    required this.mirrorDir,
+    DbController? db,
+    Future<String?> Function()? findOtzariaDb,
+    Future<int?> Function(String path)? freeSpace,
+  }) : db = db ?? DbController(AppController()..dataDir = p.dirname(mirrorDir)),
+       _findOtzariaDb = findOtzariaDb ?? OtzariaLocator.findDbPath,
+       _freeSpace = freeSpace ?? freeDiskSpace {
     this.db.autoInspect = false;
     this.db.addListener(notifyListeners);
   }
@@ -38,6 +44,7 @@ class QuickUpdateController extends ChangeNotifier {
   final String mirrorDir;
   final DbController db;
   final Future<String?> Function() _findOtzariaDb;
+  final Future<int?> Function(String path) _freeSpace;
 
   QuickPhase phase = QuickPhase.checking;
   QuickAction? action;
@@ -266,7 +273,7 @@ class QuickUpdateController extends ChangeNotifier {
     final m = db.remote!.manifest;
     final missing = missingBytes(_driveList, mirrorDir);
     if (missing > 0) {
-      final free = await freeDiskSpace(p.join(mirrorDir, 'x'));
+      final free = await _freeSpace(p.join(mirrorDir, 'x'));
       if (free != null && free < missing + 64 * 1024 * 1024) {
         _fail(
           'אין מספיק מקום פנוי בכונן. דרושים ${_size(missing)}, '

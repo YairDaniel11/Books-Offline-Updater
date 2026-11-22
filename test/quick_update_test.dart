@@ -530,7 +530,7 @@ void main() {
     testWidgets('מחשב מחובר: כפתור "הורדה" אחד, ובסיום "הכונן מוכן"', (t) async {
       await t.binding.setSurfaceSize(const Size(quickWindowWidth, quickWindowHeight));
       final db = _FakeDb()..fakeRemote = _release(_manifest(52));
-      final c = QuickUpdateController(mirrorDir: tmp.path, db: db);
+      final c = QuickUpdateController(mirrorDir: tmp.path, db: db, freeSpace: (_) async => null);
       var closed = false;
       await t.pumpWidget(host(QuickUpdateScreen(controller: c, autoStart: false, onClose: () => closed = true)));
       await settle(t, c, c.start);
