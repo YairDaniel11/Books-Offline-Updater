@@ -45,8 +45,10 @@ const dbMirrorDirName = 'OtzariaDbMirror';
 
 /// מצב ופעולות של לשונית המסד: הורדה למראה (מחשב מחובר) והתקנה/עדכון ממנה (מחשב חסום).
 class DbController extends ChangeNotifier {
-  DbController(this._app);
+  /// [configDir]: תיקיית ההגדרות (לבדיקות); ברירת מחדל: תיקיית ההגדרות של המשתמש.
+  DbController(this._app, {this.configDir});
 
+  final String? configDir;
   final AppController _app;
   final DbService _service = DbService();
 
@@ -122,19 +124,31 @@ class DbController extends ChangeNotifier {
 
   bool get busy => activity != null;
 
+  /// `false`: לא מזהים את המסד המקומי מעצמנו (חישוב SHA של המסד); הקורא מזהה כשצריך (עדכון מהיר).
+  bool autoInspect = true;
+
   // ─── אתחול והגדרות ────────────────────────────────────────────────
 
   /// פר-מחשב: מיקום המסד זכור כאן, ולא נוסע עם התוכנה בדיסק און קי.
-  File get _settingsFile => File(p.join(AppPaths.userConfigDir(), 'db_settings.json'));
+  File get _settingsFile => File(p.join(configDir ?? AppPaths.userConfigDir(), 'db_settings.json'));
 
-  Future<void> init() async {
+  /// תיקיית המראה שנשמרה בהגדרות, כשבהפעלה הזו המראה ננעצה ל-[init] `pinMirrorDir` (לא נדרסת בשמירה).
+  String? _savedMirrorDir;
+  bool _mirrorPinned = false;
+
+  /// [pinMirrorDir]: תיקיית מראה קבועה להפעלה הזו בלבד (מצב "עדכון מהיר" מתוך עדכוני אוצריא),
+  /// בלי לשנות את מה שנשמר בהגדרות.
+  Future<void> init({String? pinMirrorDir}) async {
     if (!_loaded) {
       _loaded = true;
       mirrorDir = p.join(_app.dataDir, dbMirrorDirName);
       try {
         final j = jsonDecode(await _settingsFile.readAsString()) as Map<String, dynamic>;
         final m = j['mirrorDir'];
-        if (m is String && m.isNotEmpty) mirrorDir = m;
+        if (m is String && m.isNotEmpty) {
+          mirrorDir = m;
+          _savedMirrorDir = m;
+        }
         final t = j['targetDb'];
         if (t is String) targetDb = t;
         final sh = j['shasHash'];
@@ -142,6 +156,10 @@ class DbController extends ChangeNotifier {
         final c = j['shaCache'];
         if (c is Map<String, dynamic>) _shaCache = c;
       } catch (_) {}
+      if (pinMirrorDir != null) {
+        mirrorDir = pinMirrorDir;
+        _mirrorPinned = true;
+      }
       otzariaDbPath = await OtzariaLocator.findDbPath();
       // מחשב שעוד לא נבחר בו מיקום: ישר למקום שאוצריא קוראת ממנו, ואם המסד עוד לא צורף אליה,
       // למיקום קבוע במסמכים (ואז מסבירים איך לצרף אותו).
@@ -152,7 +170,7 @@ class DbController extends ChangeNotifier {
     }
     if (targetDb.isNotEmpty) await DbService.recoverInterrupted(targetDb);
     await refreshMirror();
-    if (targetDb.isNotEmpty) await inspectTarget();
+    if (autoInspect && targetDb.isNotEmpty) await inspectTarget();
     notifyListeners();
     await checkRemote();
   }
@@ -171,7 +189,7 @@ class DbController extends ChangeNotifier {
     try {
       await _settingsFile.parent.create(recursive: true);
       await _settingsFile.writeAsString(jsonEncode({
-        'mirrorDir': mirrorDir,
+        'mirrorDir': _mirrorPinned ? (_savedMirrorDir ?? '') : mirrorDir,
         'targetDb': targetDb,
         'shaCache': _shaCache,
         'shasHash': shasHash,
@@ -191,6 +209,7 @@ class DbController extends ChangeNotifier {
 
   void clearMessage() {
     message = null;
+    messageIsError = false;
     notifyListeners();
   }
 
@@ -245,7 +264,7 @@ class DbController extends ChangeNotifier {
     }
     checking = false;
     notifyListeners();
-    if (remote != null && targetDb.isNotEmpty && !busy) await inspectTarget();
+    if (autoInspect && remote != null && targetDb.isNotEmpty && !busy) await inspectTarget();
   }
 
   // ─── מראה ─────────────────────────────────────────────────────────
@@ -265,6 +284,7 @@ class DbController extends ChangeNotifier {
   Future<void> setMirrorDir(String dir) async {
     if (busy) return;
     mirrorDir = dir;
+    _mirrorPinned = false;
     await _save();
     await refreshMirror();
   }
@@ -325,6 +345,8 @@ class DbController extends ChangeNotifier {
 
   /// מצרף את המסד לאוצריא אם עוד לא צורף בנתיב הזה, כדי שהספרים יופיעו בה מעצמם.
   /// מחזיר תוספת להודעת הסיום.
+  Future<String> ensureAttached() => _ensureAttached();
+
   Future<String> _ensureAttached() async {
     if (otzariaDbPath == targetDb) return '';
     if (await OtzariaLocator.isRunning()) {
@@ -577,21 +599,30 @@ class DbController extends ChangeNotifier {
   }
 
   Future<void> download() async {
-    final r = remote;
-    if (r == null || busy) return;
     final list = selectedDownload;
+    if (remote == null || busy) return;
     if (list.isEmpty) {
       _msg('אין קבצים להורדה לבחירה הזו.', error: true);
       return;
     }
+    await downloadArtifacts(list, title: list.first.isDelta ? 'מוריד קובץ עדכון' : 'מוריד את המסד המלא');
+  }
+
+  /// מוריד את [list] לתיקיית המראה. מחזיר `true` כשההורדה הושלמה.
+  Future<bool> downloadArtifacts(List<DbArtifact> list, {required String title, String? doneMessage}) async {
+    final r = remote;
+    if (r == null || busy || list.isEmpty) return false;
     message = null;
     _cancel = false;
-    activity = DbActivity(list.first.isDelta ? 'מוריד קובץ עדכון' : 'מוריד את המסד המלא');
+    activity = DbActivity(title);
     notifyListeners();
+    var ok = false;
     try {
       await _service.download(r, list, mirrorDir,
           onProgress: _progress, isCancelled: () => _cancel, steps: remoteSteps);
-      _msg('ההורדה הסתיימה (גרסה ${r.manifest.version}). הקבצים בתיקייה: $mirrorDir', transferDone: true);
+      ok = true;
+      _msg(doneMessage ?? 'ההורדה הסתיימה (גרסה ${r.manifest.version}). הקבצים בתיקייה: $mirrorDir',
+          transferDone: true);
     } on DownloadCancelled {
       _msg('ההורדה נעצרה. ניתן להמשיך אותה בהמשך מאותה נקודה.');
     } catch (e) {
@@ -599,7 +630,8 @@ class DbController extends ChangeNotifier {
     }
     activity = null;
     await refreshMirror();
-    if (targetDb.isNotEmpty) await inspectTarget();
+    if (autoInspect && targetDb.isNotEmpty) await inspectTarget();
+    return ok;
   }
 
   /// ש"ס וגשל מורדים לצד קובץ המסד, בתיקייה "תלמוד בבלי".
@@ -732,7 +764,7 @@ class DbController extends ChangeNotifier {
   /// הודעת עצירה: אם כבר הוחלו צעדים, המסד עודכן לגרסת ביניים תקינה ואפשר להמשיך משם.
   static String _stoppedText(int applied, {required int total, bool always = false}) {
     if (applied > 0) {
-      return 'המסד עודכן לגרסת ביניים תקינה ($applied מתוך $total צעדים הוחלו) ואפשר להמשיך משם: לחצו שוב על העדכון.';
+      return 'המסד עודכן לגרסת ביניים תקינה ($applied מתוך $total צעדים הוחלו) ואפשר להמשיך משם: לחצו שוב על ההעתקה.';
     }
     return always ? 'המסד הקיים לא שונה.' : 'הפעולה נעצרה. המסד הקיים לא שונה.';
   }
@@ -800,7 +832,8 @@ class DbController extends ChangeNotifier {
     }
   }
 
-  Future<void> install() async {
+  /// [title]: כותרת הפעולה בזמן ההתקנה (העדכון המהיר מציג "מתקין"/"מעדכן" במקום "מעתיק").
+  Future<void> install({String title = 'מעתיק את הספרים'}) async {
     final pl = plan;
     if (pl == null || !pl.canRun || busy) return;
     if (await _blockedByOtzaria()) return;
@@ -816,7 +849,7 @@ class DbController extends ChangeNotifier {
     }
     message = null;
     _cancel = false;
-    activity = DbActivity('מעתיק את הספרים');
+    activity = DbActivity(title);
     notifyListeners();
     var applied = 0;
     try {

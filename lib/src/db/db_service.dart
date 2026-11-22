@@ -301,11 +301,13 @@ class DbService {
     String dir, {
     required void Function(int bytes) onBytes,
     required bool Function() isCancelled,
+    void Function(int done, int total)? onVerify,
   }) async {
     final target = File(partPath(dir, part));
     final tmp = File('${target.path}.part');
     if (await target.exists()) {
-      if (await target.length() == part.size && await sha256OfFile(target.path, isCancelled: isCancelled) == part.sha256) {
+      if (await target.length() == part.size &&
+          await sha256OfFile(target.path, onProgress: onVerify, isCancelled: isCancelled) == part.sha256) {
         onBytes(part.size);
         return;
       }
@@ -337,18 +339,21 @@ class DbService {
           }
           final sink = tmp.openWrite(mode: have > 0 ? FileMode.append : FileMode.write);
           try {
-            await for (final c in res.timeout(const Duration(seconds: 30))) {
+            // addStream ולא add בלולאה: הקריאה מהרשת נעצרת בזמן הכתיבה, כך שההתקדמות היא מה שנכתב בפועל.
+            // עם add הנתונים הצטברו בזיכרון מול כונן נייד איטי, והתצוגה "נתקעה" בסוף על הכתיבה שנותרה.
+            await sink.addStream(res.timeout(const Duration(seconds: 30)).map((c) {
               if (isCancelled()) throw DownloadCancelled();
-              sink.add(c);
               counted += c.length;
               onBytes(c.length);
-            }
+              return c;
+            }));
             await sink.flush();
           } finally {
             await sink.close();
           }
         }
-        if (await tmp.length() == part.size && await sha256OfFile(tmp.path, isCancelled: isCancelled) == part.sha256) {
+        if (await tmp.length() == part.size &&
+            await sha256OfFile(tmp.path, onProgress: onVerify, isCancelled: isCancelled) == part.sha256) {
           await tmp.rename(target.path);
           return;
         }
@@ -388,6 +393,7 @@ class DbService {
           done += n;
           onProgress(done, total, part.fileName);
         },
+        onVerify: (d, t) => onProgress(d, t, 'בודק תקינות: ${part.fileName}'),
         isCancelled: isCancelled,
       );
     }
@@ -465,17 +471,21 @@ class DbService {
         throw DbException('בתיקיית המראה חסר או חלקי הקובץ ${part.fileName}');
       }
     }
-    // אימות תקינות החלקים לפני הפענוח (העתקה בדיסק און קי עלולה להשחית).
-    final total = artifact.downloadSize;
-    var base = 0;
-    for (final part in artifact.parts) {
-      final sha = await sha256OfFile(
-        partPath(mirrorDir, part),
-        onProgress: (d, _) => onProgress(base + d, total, 'בודק תקינות: ${part.fileName}'),
-        isCancelled: isCancelled,
-      );
-      if (sha != part.sha256) throw DbException('הקובץ ${part.fileName} פגום. יש להוריד או להעתיק אותו מחדש.');
-      base += part.size;
+    // אימות תקינות החלקים לפני הפענוח (העתקה בדיסק און קי עלולה להשחית) — רק בקובצי עדכון, שהם קטנים.
+    // במסד המלא זו הייתה קריאה שנייה של כל הקובץ מהכונן; ה-SHA-256 של התוצאה, שנבדק לפני ההחלפה,
+    // כבר תופס כל פגם, והמסד הקיים לא משתנה עד שהבדיקה עוברת.
+    if (artifact.isDelta) {
+      final total = artifact.downloadSize;
+      var base = 0;
+      for (final part in artifact.parts) {
+        final sha = await sha256OfFile(
+          partPath(mirrorDir, part),
+          onProgress: (d, _) => onProgress(base + d, total, 'בודק את הקבצים בכונן: ${part.fileName}'),
+          isCancelled: isCancelled,
+        );
+        if (sha != part.sha256) throw DbException('הקובץ ${part.fileName} פגום. יש להוריד או להעתיק אותו מחדש.');
+        base += part.size;
+      }
     }
 
     final tmpPath = '$target.new';
@@ -496,7 +506,12 @@ class DbService {
       }
       if (isCancelled()) throw DownloadCancelled();
       if (r.size != artifact.size || r.sha256 != artifact.sha256) {
-        throw DbException('התוצאה לא עברה בדיקת תקינות. המסד הקיים לא שונה.');
+        throw DbException(
+          artifact.isDelta
+              ? 'התוצאה לא עברה בדיקת תקינות. המסד הקיים לא שונה.'
+              : 'המסד שחולץ לא עבר בדיקת תקינות, כנראה כי הקובץ בכונן פגום. המסד הקיים לא שונה. '
+                    'הורידו אותו מחדש במחשב המחובר.',
+        );
       }
       onProgress(1, 1, 'מחליף את הקובץ');
       final t = File(tmpPath);
