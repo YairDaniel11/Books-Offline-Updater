@@ -87,3 +87,15 @@ bool isFinalNetFailure(Object e) {
   final k = kindOf(e);
   return k == NetErrorKind.blocked || k == NetErrorKind.rateLimit;
 }
+
+/// שרתי גיטהאב שמותר להמשיך מולם גם כשמסנן אינטרנט מחליף את תעודת ה-TLS בתעודה משלו
+/// שאינה מותקנת במאגר התעודות שהתוכנה רואה (CERTIFICATE_VERIFY_FAILED).
+/// ההחלטה נקראת רק כשהאימות הרגיל נכשל, ורק עבור השרתים האלה.
+bool _isGithubHost(String host) {
+  final h = host.toLowerCase();
+  return h == 'github.com' || h.endsWith('.github.com') || h.endsWith('.githubusercontent.com');
+}
+
+/// לקוח HTTP שמתאים גם לרשת עם מסנן שמפענח TLS.
+/// מניפסטים וקבצי מסד מאומתים בחתימה ו-SHA-256, ולכן החלפת התעודה לא פוגעת באמינותם.
+HttpClient createHttpClient() => HttpClient()..badCertificateCallback = (cert, host, port) => _isGithubHost(host);

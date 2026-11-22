@@ -73,7 +73,7 @@ typedef ProgressCallback = void Function(int done, int? total, String detail);
 
 class DbService {
   DbService() {
-    _client = HttpClient()
+    _client = createHttpClient()
       ..connectionTimeout = const Duration(seconds: 15)
       ..userAgent = 'books-offline-update'
       ..autoUncompress = false;

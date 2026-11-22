@@ -124,7 +124,7 @@ class RepoException implements Exception {
 
 class RepoService {
   RepoService() {
-    _client = HttpClient()
+    _client = createHttpClient()
       ..connectionTimeout = const Duration(seconds: 12)
       ..userAgent = 'books-offline-update'
       ..autoUncompress = false;
