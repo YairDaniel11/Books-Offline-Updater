@@ -162,7 +162,8 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
       builder: (context, _) => Scaffold(
         body: Column(
           children: [
-            _TitleBar(onClose: _close),
+            // פס כותרת מצויר רק ב-Windows (שם החלון בלי מסגרת). ב-Mac יש מסגרת מערכת רגילה.
+            if (!Platform.isMacOS) _TitleBar(onClose: _close),
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
@@ -251,7 +252,11 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
     final path = QuickLog.path;
     if (path == null) return;
     try {
-      Process.run('explorer.exe', ['/select,', path]);
+      if (Platform.isMacOS) {
+        Process.run('open', ['-R', path]);
+      } else {
+        Process.run('explorer.exe', ['/select,', path]);
+      }
     } catch (e) {
       QuickLog.warn('פתיחת הלוג נכשלה: $e');
     }
