@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 
+import 'fast_download.dart';
 import 'net_errors.dart';
 
 const githubRepo = 'YairDaniel11/Otzarya-Unofficial-Books';
@@ -192,7 +193,7 @@ class RepoService {
     return _getBytes(url, timeout: const Duration(seconds: 60));
   }
 
-  /// מוריד zip לקובץ זמני, עם המשכה בהפסקה ואימות MD5. מחזיר כשהקובץ תקין.
+  /// מוריד zip לקובץ זמני בכמה חיבורים מקבילים, עם המשכה בהפסקה ואימות MD5. מחזיר כשהקובץ תקין.
   Future<void> downloadZip(
     BookItem item,
     String destPath, {
@@ -204,39 +205,17 @@ class RepoService {
     for (var attempt = 0; attempt < 4; attempt++) {
       if (isCancelled()) throw DownloadCancelled();
       try {
-        var have = await file.exists() ? await file.length() : 0;
-        final req = await _client.getUrl(Uri.parse('$_latestDl/${item.zip}'));
-        if (have > 0) req.headers.set(HttpHeaders.rangeHeader, 'bytes=$have-');
-        final res = await req.close().timeout(const Duration(seconds: 30));
-        if (res.statusCode == 416) {
-          await res.drain<void>(); // כבר הורד במלואו — נבדוק hash למטה.
-        } else {
-          await ensureOk(res, ok: const {200, 206});
-          if (have > 0 && !isExactContinuation(res, have)) {
-            // השרת התעלם מ-Range או החזיר טווח אחר: ההמשך אינו מדויק, מתחילים מחדש.
-            have = 0;
-          }
-          final total = res.contentLength >= 0 ? res.contentLength + have : null;
-          final sink = file.openWrite(mode: have > 0 ? FileMode.append : FileMode.write);
-          var got = have;
-          try {
-            await for (final c in res.timeout(const Duration(seconds: 30))) {
-              if (isCancelled()) {
-                await sink.close();
-                throw DownloadCancelled();
-              }
-              sink.add(c);
-              got += c.length;
-              onProgress(got, total);
-            }
-            await sink.flush();
-          } finally {
-            await sink.close();
-          }
-        }
+        // כמה חיבורים מקבילים לקובץ, עם המשכה ממה שכבר ירד.
+        await fastDownload(
+          _client,
+          '$_latestDl/${item.zip}',
+          destPath,
+          onProgress: onProgress,
+          isCancelled: isCancelled,
+        );
         final md5sum = (await md5.bind(file.openRead()).first).toString();
         if (md5sum == item.hash) return;
-        await file.delete();
+        await discardPartial(destPath);
         throw RepoException('בדיקת תקינות הקובץ נכשלה');
       } on DownloadCancelled {
         rethrow;
