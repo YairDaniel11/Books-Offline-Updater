@@ -1,12 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 import '../services/repo_service.dart' show DownloadCancelled, githubRepo;
+import '../services/disk_space.dart';
+import '../services/drive_kind.dart';
+import '../services/fast_download.dart';
+import '../services/write_behind.dart';
 import '../services/native_sha256.dart';
 import '../services/net_errors.dart';
 import 'db_manifest.dart';
@@ -318,46 +323,25 @@ class DbService {
     for (var attempt = 0; attempt < 4; attempt++) {
       if (isCancelled()) throw DownloadCancelled();
       try {
-        var have = await tmp.exists() ? await tmp.length() : 0;
-        if (have > part.size) {
-          await tmp.delete();
-          have = 0;
-        }
-        // מסנכרנים את המונה לגודל בפועל (אחרי ניסיון חוזר ההמשך מתחיל מהקובץ הקיים).
-        onBytes(have - counted);
-        counted = have;
-        if (have < part.size) {
-          final req = await _client.getUrl(Uri.parse(part.url));
-          if (have > 0) req.headers.set(HttpHeaders.rangeHeader, 'bytes=$have-');
-          final res = await req.close().timeout(const Duration(seconds: 30));
-          await ensureOk(res, ok: const {200, 206});
-          if (have > 0 && !isExactContinuation(res, have)) {
-            // השרת התעלם מ-Range או החזיר טווח אחר: מתחילים מחדש.
-            onBytes(-counted);
-            counted = 0;
-            have = 0;
-          }
-          final sink = tmp.openWrite(mode: have > 0 ? FileMode.append : FileMode.write);
-          try {
-            // addStream ולא add בלולאה: הקריאה מהרשת נעצרת בזמן הכתיבה, כך שההתקדמות היא מה שנכתב בפועל.
-            // עם add הנתונים הצטברו בזיכרון מול כונן נייד איטי, והתצוגה "נתקעה" בסוף על הכתיבה שנותרה.
-            await sink.addStream(res.timeout(const Duration(seconds: 30)).map((c) {
-              if (isCancelled()) throw DownloadCancelled();
-              counted += c.length;
-              onBytes(c.length);
-              return c;
-            }));
-            await sink.flush();
-          } finally {
-            await sink.close();
-          }
-        }
+        // כמה חיבורים מקבילים, עם המשכה ממה שכבר ירד. המונה מסונכרן לבתים שבדיסק בפועל
+        // (הכתיבה ממתינה לדיסק, כך שמול כונן נייד איטי התצוגה לא מקדימה את מה שנכתב).
+        await fastDownload(
+          _client,
+          part.url,
+          tmp.path,
+          knownSize: part.size,
+          onProgress: (have, _) {
+            onBytes(have - counted);
+            counted = have;
+          },
+          isCancelled: isCancelled,
+        );
         if (await tmp.length() == part.size &&
             await sha256OfFile(tmp.path, onProgress: onVerify, isCancelled: isCancelled) == part.sha256) {
           await tmp.rename(target.path);
           return;
         }
-        await tmp.delete();
+        await discardPartial(tmp.path);
         onBytes(-counted);
         counted = 0;
         throw DbException('בדיקת תקינות הקובץ נכשלה');
@@ -384,18 +368,22 @@ class DbService {
     await Directory(dir).create(recursive: true);
     final parts = [for (final a in artifacts) ...a.parts];
     final total = parts.fold<int>(0, (a, b) => a + b.size);
-    var done = 0;
-    for (final part in parts) {
-      await _downloadPart(
-        part,
-        dir,
-        onBytes: (n) {
-          done += n;
-          onProgress(done, total, part.fileName);
-        },
-        onVerify: (d, t) => onProgress(d, t, 'בודק תקינות: ${part.fileName}'),
-        isCancelled: isCancelled,
-      );
+    if (isRemovableDrive(dir)) {
+      await _downloadToDrive(parts, dir, total, onProgress, isCancelled);
+    } else {
+      var done = 0;
+      for (final part in parts) {
+        await _downloadPart(
+          part,
+          dir,
+          onBytes: (n) {
+            done += n;
+            onProgress(done, total, part.fileName);
+          },
+          onVerify: (d, t) => onProgress(d, t, 'בודק תקינות: ${part.fileName}'),
+          isCancelled: isCancelled,
+        );
+      }
     }
     // המניפסט נשמר אחרון: מראה עם מניפסט תמיד מצביעה על קבצים שלמים.
     await _writeAtomic(File(p.join(dir, manifestFileName)), release.manifestBytes);
@@ -405,6 +393,78 @@ class DbService {
       await _writeAtomic(File(p.join(dir, stepsSigFileName)), utf8.encode(steps.signature));
     }
     await _cleanOrphans(dir, release.manifest, steps?.manifest ?? (await readMirrorSteps(dir))?.manifest);
+  }
+
+  /// כמה חלקים יורדים במקביל כשהיעד הוא כונן נשלף.
+  static const driveParallel = 3;
+  static bool _sweptSpill = false;
+
+  /// הורדה לכונן נשלף בשיטה של העדכון האופליין של אוצריא ([WriteBehindPool]): כונן USB איטי
+  /// כותב מהר רק רצף ארוך לקובץ אחד. כל כתיבה נשמרת קודם בקובץ זמני בדיסק המקומי וחוזרת מיד,
+  /// וכותב יחיד מעביר לכונן קובץ אחד עד סופו בגושים של 1MiB - כבר תוך כדי ההורדה.
+  /// כך כמה חלקים יורדים במקביל בלי שהרשת תחכה לכונן, והכונן לא קופץ בין קבצים.
+  Future<void> _downloadToDrive(
+    List<DbPart> parts,
+    String dir,
+    int total,
+    ProgressCallback onProgress,
+    bool Function() isCancelled,
+  ) async {
+    if (!_sweptSpill) {
+      _sweptSpill = true;
+      WriteBehindPool.sweepStaleSpill(); // שאריות של ריצה שקרסה
+    }
+    // כמו באוצריא: הקבצים הזמניים מקבלים עד חצי מהמקום הפנוי בדיסק המקומי, ולא יותר מ-4GiB.
+    const cap = 4 * 1024 * 1024 * 1024;
+    final free = await freeDiskSpace(p.join(Directory.systemTemp.path, 'x'));
+    final half = free == null ? cap ~/ 4 : free ~/ 2;
+    final pool = WriteBehindPool(maxPendingBytes: half < cap ? half : cap);
+
+    Object? error;
+    StackTrace? errorStack;
+    var dropped = false;
+    // בעצירה (או בכשל של חלק אחר) מה שעוד לא נכתב לכונן נזרק, כדי לא לחכות לו דקות.
+    // מה שכבר בכונן נשאר תחילית תקינה, וההורדה הבאה ממשיכה ממנה.
+    bool stop() {
+      final s = error != null || isCancelled();
+      if (s && !dropped) {
+        dropped = true;
+        pool.abandonPending();
+      }
+      return s;
+    }
+
+    var done = 0;
+    var next = 0;
+    Future<void> worker() async {
+      while (error == null && next < parts.length) {
+        final part = parts[next++];
+        try {
+          await _downloadPart(
+            part,
+            dir,
+            onBytes: (n) {
+              done += n;
+              onProgress(done, total, part.fileName);
+            },
+            onVerify: (d, t) => onProgress(done, total, 'בודק תקינות: ${part.fileName}'),
+            isCancelled: stop,
+          );
+        } catch (e, st) {
+          if (error == null) {
+            error = e;
+            errorStack = st;
+          }
+          stop();
+        }
+      }
+    }
+
+    await pool.runZoned(
+      () => Future.wait([for (var i = 0; i < math.min(driveParallel, parts.length); i++) worker()]),
+      shouldWrap: (path) => p.isWithin(dir, path),
+    );
+    if (error != null) Error.throwWithStackTrace(error!, errorStack!);
   }
 
   Future<void> _writeAtomic(File f, List<int> bytes) async {

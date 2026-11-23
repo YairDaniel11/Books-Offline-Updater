@@ -9,6 +9,7 @@ import '../pak/pak_file.dart';
 import '../services/zip_extract.dart';
 import '../services/app_paths.dart';
 import '../services/copy_ledger.dart';
+import '../services/fast_download.dart' show discardPartial;
 import '../services/net_errors.dart';
 import '../services/password_hash.dart';
 import '../services/repo_service.dart';
@@ -55,6 +56,7 @@ class AppController extends ChangeNotifier {
   String? lockHash;
 
   Activity? activity;
+  _ZipPrefetch? _prefetch;
   String? lastMessage;
   bool lastMessageIsError = false;
 
@@ -324,9 +326,7 @@ class AppController extends ChangeNotifier {
     } catch (e) {
       _msg('ההורדה נכשלה: ${friendlyNetError(e)}', error: true);
     } finally {
-      try {
-        await File(zipPath).delete();
-      } catch (_) {}
+      await discardPartial(zipPath);
       activity = null;
       notifyListeners();
     }
@@ -493,6 +493,15 @@ class AppController extends ChangeNotifier {
 
     var ok = 0;
     final failed = <String>[];
+    final prefetch = _ZipPrefetch(
+      _repo,
+      // ה-zip הזמניים בדיסק המקומי ולא ליד ה-PAK: כשה-PAK בדיסק און קי, ההורדות המקבילות
+      // לא כותבות לכונן לסירוגין, והכותב היחיד אליו הוא השמירה ב-PAK (כמו בעדכון האופליין של אוצריא).
+      p.join(Directory.systemTemp.path, 'BooksOfflineUpdate', 'books_dl'),
+      [for (final t in targets) ..._downloadUnits(t)],
+      () => activity?.cancelled ?? true,
+    );
+    _prefetch = prefetch;
     try {
       for (var i = 0; i < targets.length; i++) {
         if (activity!.cancelled) break;
@@ -514,6 +523,8 @@ class AppController extends ChangeNotifier {
     } catch (e) {
       failed.add(friendlyNetError(e));
     } finally {
+      _prefetch = null;
+      await prefetch.close(); // עוצר הורדות מוקדמות שלא נוצלו ומוחק את הקבצים שלהן
       final cancelled = activity?.cancelled ?? false;
       activity = null;
       if (cancelled) {
@@ -563,18 +574,16 @@ class AppController extends ChangeNotifier {
 
   /// מוריד אוסף אחד ל-PAK. מחזיר `null` בהצלחה, אחרת תיאור כשל.
   Future<String?> _downloadOne(BookItem node, String counter) async {
-    final tmpDir = Directory(p.join(dataDir, '.download_tmp'));
-    await tmpDir.create(recursive: true);
-    final zipPath = p.join(tmpDir.path, node.zip);
+    final prefetch = _prefetch!;
+    final zipPath = prefetch.pathOf(node);
     try {
-      await _repo.downloadZip(
+      // האוסף אולי כבר ירד (או יורד) ברקע; בזמן שהוא נשמר במאגר, האוספים הבאים כבר יורדים.
+      await prefetch.take(
         node,
-        zipPath,
-        onProgress: (got, total) => _progress(
+        (got, total) => _progress(
           '[$counter] מוריד: ${node.name}${total != null ? ' (${_mb(got)} מתוך ${_mb(total)})' : ''}',
           total != null ? got / total : null,
         ),
-        isCancelled: () => activity?.cancelled ?? true,
       );
       _progress('[$counter] שומר במאגר: ${node.name}', null);
       final seen = await pak!.ingestZip(
@@ -601,11 +610,14 @@ class AppController extends ChangeNotifier {
     } catch (e) {
       return '$e';
     } finally {
-      try {
-        await File(zipPath).delete();
-      } catch (_) {}
+      await discardPartial(zipPath);
     }
   }
+
+  /// האוספים שההורדה תוריד בפועל, לפי הסדר (כמו [_downloadRecursive] כשאין כשלים).
+  List<BookItem> _downloadUnits(BookItem node) => hasIgnoredInside(node)
+      ? [for (final c in children(node).where((c) => !isIgnored(c))) ..._downloadUnits(c)]
+      : [node];
 
   Future<void> _downloadLinks(List<String> failed) async {
     final f = dorotFile;
@@ -803,4 +815,91 @@ class AppController extends ChangeNotifier {
     _repo.close();
     super.dispose();
   }
+}
+
+/// הורדה מוקדמת של האוספים הבאים בתור, כמה במקביל, בזמן שהאוסף הנוכחי נשמר במאגר.
+/// לכל היותר [parallel] אוספים יורדים או ממתינים בדיסק בכל רגע.
+class _ZipPrefetch {
+  _ZipPrefetch(this._repo, this._dir, this._plan, this._cancelled);
+
+  static const parallel = 3;
+
+  final RepoService _repo;
+  final String _dir;
+  final List<BookItem> _plan;
+  final bool Function() _cancelled;
+
+  final Map<String, _ZipFetch> _fetches = {};
+  final Set<String> _consumed = {};
+  var _pos = 0;
+  var _closed = false;
+
+  String pathOf(BookItem n) => p.join(_dir, n.zip);
+
+  bool _stop() => _closed || _cancelled();
+
+  int get _outstanding => _fetches.keys.where((k) => !_consumed.contains(k)).length;
+
+  _ZipFetch _start(BookItem n) => _fetches.putIfAbsent(n.zip, () {
+        final f = _ZipFetch();
+        f.result = () async {
+          try {
+            await Directory(_dir).create(recursive: true);
+            await _repo.downloadZip(
+              n,
+              pathOf(n),
+              onProgress: (got, total) {
+                f.got = got;
+                f.total = total;
+                f.listener?.call(got, total);
+              },
+              isCancelled: _stop,
+            );
+            return null;
+          } catch (e) {
+            return e;
+          } finally {
+            _fill();
+          }
+        }();
+        return f;
+      });
+
+  void _fill() {
+    for (var i = _pos; i < _plan.length && _outstanding < parallel && !_stop(); i++) {
+      if (!_fetches.containsKey(_plan[i].zip)) _start(_plan[i]);
+    }
+  }
+
+  /// מחכה שהאוסף [n] יהיה בדיסק (ב-[pathOf]); מתחיל את ההורדה אם עוד לא התחילה. זורק בכשל.
+  Future<void> take(BookItem n, void Function(int got, int? total) onProgress) async {
+    final idx = _plan.indexOf(n);
+    if (idx >= _pos) _pos = idx + 1;
+    if (_consumed.remove(n.zip)) _fetches.remove(n.zip); // בקשה חוזרת: מורידים מחדש
+    final f = _start(n);
+    f.listener = onProgress;
+    if (f.got > 0) onProgress(f.got, f.total);
+    _fill();
+    final err = await f.result;
+    f.listener = null;
+    _consumed.add(n.zip);
+    _fill();
+    if (err != null) throw err;
+  }
+
+  /// עוצר הורדות שלא נוצלו, מחכה להן ומוחק את הקבצים שלהן.
+  Future<void> close() async {
+    _closed = true;
+    await Future.wait([for (final f in _fetches.values) f.result]);
+    for (final k in _fetches.keys.where((k) => !_consumed.contains(k)).toList()) {
+      await discardPartial(p.join(_dir, k));
+    }
+  }
+}
+
+class _ZipFetch {
+  late final Future<Object?> result;
+  int got = 0;
+  int? total;
+  void Function(int got, int? total)? listener;
 }
