@@ -39,6 +39,10 @@ class DbActivity {
   String detail = '';
   double? progress;
   bool cancelled = false;
+
+  /// הבתים שכבר עובדו ומתוך כמה (לחישוב מהירות וזמן משוער).
+  int done = 0;
+  int? total;
 }
 
 const dbMirrorDirName = 'OtzariaDbMirror';
@@ -230,6 +234,8 @@ class DbController extends ChangeNotifier {
     final a = activity;
     if (a == null) return;
     a.detail = detail;
+    a.done = done;
+    a.total = total;
     a.progress = total == null || total == 0 ? null : (done / total).clamp(0.0, 1.0);
     final now = DateTime.now();
     if (now.difference(_lastNotify).inMilliseconds > 120) {

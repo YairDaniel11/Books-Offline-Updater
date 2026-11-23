@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -8,7 +9,9 @@ import '../db/db_controller.dart';
 import '../db/db_manifest.dart';
 import '../db/db_service.dart';
 import '../services/disk_space.dart';
+import '../services/net_errors.dart';
 import '../services/otzaria_locator.dart';
+import 'progress_rate.dart';
 import 'quick_log.dart';
 
 /// checking: בדיקה אוטומטית בפתיחה. ready: מחכים ללחיצה על הכפתור ([action]). working: הורדה/עדכון.
@@ -34,7 +37,156 @@ class QuickUpdateController extends ChangeNotifier {
        _findOtzariaDb = findOtzariaDb ?? OtzariaLocator.findDbPath,
        _freeSpace = freeSpace ?? freeDiskSpace {
     this.db.autoInspect = false;
-    this.db.addListener(notifyListeners);
+    this.db.addListener(_onDb);
+  }
+
+  /// כמה זמן מחכים לשרת לפני שמציעים לדלג על הרשת ולעדכן מהכונן.
+  static Duration slowNetwork = const Duration(seconds: 6);
+
+  /// מהירות וזמן משוער של הפעולה הנוכחית.
+  final ProgressRate rate = ProgressRate();
+
+  void _onDb() {
+    final a = db.activity;
+    if (a == null || a.total == null || a.total! <= 0) {
+      rate.reset();
+    } else if (!_verifying(a)) {
+      // לפי כותרת השלב בלבד: שם הקובץ ב-detail מתחלף בכל חלק, והמדידה הייתה מתאפסת בכל פעם.
+      // בדיקות התקינות שבין החלקים לא נמדדות, כדי לא לשבור את מדידת ההורדה.
+      rate.add(a.title, a.done, a.total);
+    }
+    // הבדיקה מול השרת התחילה בפועל: רק מעכשיו סופרים את זמן ההמתנה לפני הצעת הדילוג.
+    if (_skip != null && db.checking && _slowTimer == null && !netSlow) {
+      _slowTimer = Timer(slowNetwork, () {
+        netSlow = true;
+        notifyListeners();
+      });
+    }
+    notifyListeners();
+  }
+
+  /// בדיקת תקינות (SHA) בין חלקי ההורדה או לפני ההחלה — לא הורדה, ולכן בלי מהירות.
+  static bool _verifying(DbActivity a) => a.detail.startsWith('בודק');
+
+  /// רענון שורת המהירות גם כשאין התקדמות (הורדה תקועה: ההערכה נעלמת במקום להישאר ישנה).
+  Timer? _tick;
+
+  /// שורת "12.3 MB/s · עוד כ-3 דק'" בזמן פעולה; ריקה כשאין עדיין הערכה.
+  String get rateText {
+    final a = db.activity;
+    if (a == null || phase != QuickPhase.working || _verifying(a)) return '';
+    final parts = <String>[];
+    final speed = rate.bytesPerSecond;
+    // מהירות רק בהורדה מהרשת; בהתקנה מהכונן המספר פחות אומר למשתמש.
+    if (action == QuickAction.download && !localMode && speed != null && speed > 0) {
+      parts.add(_isolate('${DbController.formatBytes(speed.round())}/s'));
+    }
+    final left = rate.remaining;
+    if (left != null) parts.add(ProgressRate.formatRemaining(left));
+    return parts.join(' · ');
+  }
+
+  // ─── שלבי הבדיקה ──────────────────────────────────────────────────
+
+  /// מה נבדק כרגע (במצב [QuickPhase.checking]).
+  String get checkingText {
+    if (db.inspecting) return 'מזהה את גרסת המסד במחשב...';
+    if (db.checking) return 'מתחבר לשרת העדכונים...';
+    return online == false ? 'בודק את המסד...' : 'בודק עדכונים...';
+  }
+
+  /// התקדמות זיהוי המסד המקומי (חישוב SHA של כ-1GB), כשהוא רץ בזמן הבדיקה.
+  double? get checkingProgress => db.inspecting ? db.inspectProgress : null;
+
+  Completer<void>? _skip;
+  Timer? _slowTimer;
+  Future<void>? _net;
+
+  /// הבדיקה מול השרת מתארכת (למשל מסנן אינטרנט): מוצג כפתור לדלג ולעדכן מהכונן.
+  bool netSlow = false;
+
+  /// המשתמש דילג על בדיקת הרשת בהפעלה הזו: עובדים מול הכונן בלבד.
+  bool _offlineForced = false;
+
+  bool get canSkipNetwork =>
+      phase == QuickPhase.checking && netSlow && db.checking && _skip != null && !_skip!.isCompleted;
+
+  void skipNetwork() {
+    if (!canSkipNetwork) return;
+    QuickLog.info('דילוג על בדיקת הרשת (המשתמש)');
+    _skip!.complete();
+  }
+
+  /// ממתין לבדיקת הרשת או לדילוג. מחזיר `true` אם המשתמש דילג.
+  Future<bool> _awaitNetwork(Future<void> net) async {
+    _net = net;
+    final skip = _skip = Completer<void>();
+    netSlow = false;
+    _slowTimer?.cancel();
+    _slowTimer = null;
+    // הטיימר מתחיל ב-_onDb כש-db.checking נדלק (לא בזמן קריאת הכונן שלפני הרשת).
+    _onDb();
+    try {
+      // Future.any מאזין גם לשגיאה מאוחרת של [net] אחרי דילוג, כך שהיא לא נזרקת החוצה.
+      await Future.any([net, skip.future]);
+    } finally {
+      _slowTimer?.cancel();
+      _slowTimer = null;
+      netSlow = false;
+      _skip = null;
+    }
+    if (!skip.isCompleted) _net = null;
+    return skip.isCompleted;
+  }
+
+  /// הסבר טכני מלא לתקלה האחרונה (להעתקה ולדיווח). ההודעה עצמה ב-[message].
+  String? errorDetails;
+
+  /// הודעה ברורה בעברית לחריגה, במקום הטקסט הטכני שלה.
+  static String friendlyError(Object e) {
+    if (e is DbException) return e.message;
+    if (e is DbManifestException) return e.message;
+    if (e is FileSystemException) {
+      final path = e.path;
+      final where = path == null || path.isEmpty ? '' : '\n${_isolate(path)}';
+      switch (e.osError?.errorCode) {
+        case 32:
+        case 33:
+          return 'הקובץ תפוס על ידי תוכנה אחרת. סגרו את אוצריא ונסו שוב.$where';
+        case 5:
+          return 'אין הרשאה לגשת לקובץ או לתיקייה.$where';
+        case 39:
+        case 112:
+          return 'אין מספיק מקום פנוי בכונן.$where';
+        case 2:
+        case 3:
+          return 'הקובץ או התיקייה לא נמצאו. ייתכן שהכונן נותק.$where';
+        case 21:
+        case 23:
+        case 483:
+        case 1117:
+          return 'שגיאה בקריאה מהכונן. ודאו שהוא מחובר כראוי ונסו שוב.$where';
+      }
+      return 'שגיאה בגישה לקבצים.$where';
+    }
+    if (e is SocketException || e is HandshakeException || e is TlsException || e is HttpException) {
+      return friendlyNetError(e);
+    }
+    if (e is TimeoutException) return 'השרת לא הגיב בזמן. בדקו את החיבור ונסו שוב.';
+    return 'אירעה שגיאה לא צפויה.';
+  }
+
+  void _unexpected(Object e, StackTrace st) {
+    QuickLog.error('שגיאה לא צפויה', e, st);
+    errorDetails = e.toString();
+    _fail(friendlyError(e));
+  }
+
+  /// "מה חדש" בגרסה שמוצעת (מהמניפסט החתום); ריק כשאין.
+  String get releaseNotes {
+    if (phase != QuickPhase.ready) return '';
+    final r = action == QuickAction.download ? db.remote : (_offlineForced ? db.mirror : db.mirror ?? db.remote);
+    return r?.manifest.notes.trim() ?? '';
   }
 
   /// כמה גרסאות אחורה אפשר לעדכן בקובצי עדכון בלבד (כמו עדכוני אוצריא למסד הרשמי).
@@ -94,7 +246,7 @@ class QuickUpdateController extends ChangeNotifier {
   /// כשל "רך": המשתמש עצר, או ביטל אישור. מוצג בלי צבע שגיאה.
   bool get stoppedByUser => phase == QuickPhase.failed && note == null && db.message != null && !db.messageIsError;
 
-  int? get _version => (db.remote ?? db.mirror)?.manifest.version;
+  int? get _version => (_offlineForced ? db.mirror : (db.remote ?? db.mirror))?.manifest.version;
 
   // ─── בדיקה ────────────────────────────────────────────────────────
 
@@ -104,27 +256,35 @@ class QuickUpdateController extends ChangeNotifier {
     _running = true;
     note = null;
     warning = null;
+    errorDetails = null;
     action = null;
     localMode = false;
+    _offlineForced = false;
     db.clearMessage();
     phase = QuickPhase.checking;
     notifyListeners();
     try {
+      bool skipped;
       if (!_inited) {
         _inited = true;
-        await db.init(pinMirrorDir: mirrorDir);
+        skipped = await _awaitNetwork(db.init(pinMirrorDir: mirrorDir));
+        // דילוג באמצע: init עוד ממתין לרשת, אבל את הכונן הוא כבר קרא. קוראים שוב ליתר ביטחון.
+        if (skipped && !_disposed) await db.refreshMirror();
         db.otzariaDbPath = await _findOtzariaDb();
       } else {
         // ניסיון חוזר: ייתכן שבינתיים המסד צורף באוצריא, או שהתקנה קודמת נקטעה.
         db.otzariaDbPath = await _findOtzariaDb();
         if (db.targetDb.isNotEmpty) await DbService.recoverInterrupted(db.targetDb);
         await db.refreshMirror();
-        await db.checkRemote();
+        // בדיקה קודמת שדילגו עליה עדיין רצה: ממתינים לה במקום להתחיל חדשה (checkRemote היה חוזר מיד).
+        final pending = _net;
+        skipped = await _awaitNetwork(pending != null && db.checking ? pending : db.checkRemote());
       }
       if (_disposed) return;
-      online = db.remote != null;
+      _offlineForced = skipped;
+      online = !skipped && db.remote != null;
       QuickLog.info(
-        'בדיקה: ${online! ? "מחובר" : "בלי רשת"}'
+        'בדיקה: ${online! ? "מחובר" : (skipped ? "בלי רשת (דילוג)" : "בלי רשת")}'
         '${db.remoteError == null ? "" : " (שגיאת רשת: ${db.remoteError})"}'
         ', גרסה ברשת: ${db.remote?.manifest.version}, בכונן: ${db.mirror?.manifest.version}'
         '${db.mirrorError == null ? "" : " (שגיאת כונן: ${db.mirrorError})"}'
@@ -136,8 +296,7 @@ class QuickUpdateController extends ChangeNotifier {
         await _checkLocal();
       }
     } catch (e, st) {
-      QuickLog.error('שגיאה לא צפויה', e, st);
-      _fail('שגיאה לא צפויה: $e');
+      _unexpected(e, st);
     } finally {
       _running = false;
       notifyListeners();
@@ -159,10 +318,16 @@ class QuickUpdateController extends ChangeNotifier {
   /// [runUpdate]: המשתמש כבר לחץ ("עדכון במחשב זה"), ולכן כשיש עדכון מחילים אותו מיד במקום להציג כפתור.
   Future<void> _checkLocal({bool runUpdate = false}) async {
     if (db.mirror == null) {
-      final net = db.remoteError == null ? '' : '\n\nאם המחשב מחובר לרשת: ${db.remoteError}';
+      final net = db.remoteError == null || _offlineForced ? '' : '\n\nאם המחשב מחובר לרשת: ${db.remoteError}';
+      final mErr = db.mirrorError;
+      // שגיאת קבצים גולמית (באנגלית) עוברת לפרטים; ההודעה נשארת ברורה.
+      final technical = mErr != null && RegExp(r'Exception|Error:|OS Error').hasMatch(mErr);
+      if (technical) errorDetails = mErr;
       _fail(
-        db.mirrorError != null
-            ? 'קובצי המסד בכונן אינם תקינים: ${db.mirrorError}$net'
+        mErr != null
+            ? (technical
+                  ? 'לא ניתן לקרוא את קובצי המסד בכונן. ודאו שהכונן מחובר ונסו שוב.$net'
+                  : 'קובצי המסד בכונן אינם תקינים: $mErr$net')
             : 'אין בכונן קבצי מסד. הפעילו קודם את התוכנה במחשב מחובר לרשת.$net',
       );
       return;
@@ -208,7 +373,13 @@ class QuickUpdateController extends ChangeNotifier {
           return;
         }
         final from = db.localMirror?.version;
-        _ready(QuickAction.update, 'גרסה $v זמינה', from == null ? '' : 'במחשב: גרסה $from');
+        final size = plan.all.fold<int>(0, (a, b) => a + b.downloadSize);
+        final kind = plan.action == InstallAction.delta ? 'עדכון חלקי' : 'החלפת המסד כולו';
+        _ready(
+          QuickAction.update,
+          'גרסה $v זמינה',
+          [if (from != null) 'במחשב: גרסה $from', '$kind (${_size(size)})'].join(' · '),
+        );
     }
   }
 
@@ -256,14 +427,19 @@ class QuickUpdateController extends ChangeNotifier {
     _running = true;
     note = null;
     warning = null;
+    errorDetails = null;
+    rate.reset();
     phase = QuickPhase.working;
     notifyListeners();
+    _tick?.cancel();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) => notifyListeners());
     try {
       await body();
     } catch (e, st) {
-      QuickLog.error('שגיאה לא צפויה', e, st);
-      _fail('שגיאה לא צפויה: $e');
+      _unexpected(e, st);
     } finally {
+      _tick?.cancel();
+      _tick = null;
       _running = false;
       notifyListeners();
     }
@@ -329,8 +505,10 @@ class QuickUpdateController extends ChangeNotifier {
   }
 
   /// גודל בבידוד כיווניות (LRI…PDI): בלעדיו "935.1 MB" מוצג הפוך בשורה עברית.
-  static String _size(int bytes) =>
-      '${String.fromCharCode(0x2066)}${DbController.formatBytes(bytes)}${String.fromCharCode(0x2069)}';
+  static String _size(int bytes) => _isolate(DbController.formatBytes(bytes));
+
+  /// טקסט משמאל לימין (גודל, נתיב) בבידוד כיווניות בתוך שורה עברית.
+  static String _isolate(String s) => '${String.fromCharCode(0x2066)}$s${String.fromCharCode(0x2069)}';
 
   static String? _warningFrom(String attachNote) {
     final t = attachNote.trim();
@@ -440,7 +618,11 @@ class QuickUpdateController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    db.removeListener(notifyListeners);
+    _slowTimer?.cancel();
+    _tick?.cancel();
+    final skip = _skip;
+    if (skip != null && !skip.isCompleted) skip.complete();
+    db.removeListener(_onDb);
     db.dispose();
     super.dispose();
   }

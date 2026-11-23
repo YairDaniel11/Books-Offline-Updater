@@ -156,4 +156,187 @@ class QuickWindow {
       _user32.lookupFunction<Int32 Function(IntPtr, Int32), int Function(int, int)>('ShowWindow')(_hwnd, 6);
     } catch (_) {}
   }
+
+  // ---- התקדמות בכפתור שורת המשימות (ITaskbarList3) ----
+
+  static const _tbpfNoProgress = 0x0;
+  static const _tbpfIndeterminate = 0x1;
+  static const _tbpfNormal = 0x2;
+  static const _tbpfError = 0x4;
+  static const _tbpfPaused = 0x8;
+
+  /// מצביע לאובייקט ה-COM (כתובת); 0 = עדיין לא נוצר.
+  int _taskbar = 0;
+
+  /// היצירה נכשלה פעם אחת - לא מנסים שוב בכל קריאה.
+  bool _taskbarFailed = false;
+
+  int? _lastFlags;
+  double? _lastValue;
+
+  /// פונקציה מתוך ה-vtable של אובייקט COM (מיקום במצביעים).
+  Pointer<NativeFunction<T>> _vtblSlot<T extends Function>(int obj, int slot) {
+    final vtbl = Pointer<IntPtr>.fromAddress(Pointer<IntPtr>.fromAddress(obj).value);
+    return Pointer<NativeFunction<T>>.fromAddress(vtbl[slot]);
+  }
+
+  bool _ensureTaskbar() {
+    if (_taskbar != 0) return true;
+    if (_taskbarFailed) return false;
+    final clsid = calloc<ComGuid>();
+    final iid = calloc<ComGuid>();
+    final out = calloc<IntPtr>();
+    try {
+      final ole = DynamicLibrary.open('ole32.dll');
+      final coInit = ole.lookupFunction<Int32 Function(Pointer<Void>, Uint32), int Function(Pointer<Void>, int)>(
+        'CoInitializeEx',
+      );
+      final coCreate = ole
+          .lookupFunction<
+            Int32 Function(Pointer<ComGuid>, Pointer<Void>, Uint32, Pointer<ComGuid>, Pointer<IntPtr>),
+            int Function(Pointer<ComGuid>, Pointer<Void>, int, Pointer<ComGuid>, Pointer<IntPtr>)
+          >('CoCreateInstance');
+      // S_OK / S_FALSE / RPC_E_CHANGED_MODE - בכולם ממשיכים.
+      coInit(nullptr, 0x2 /* COINIT_APARTMENTTHREADED */);
+      clsid.ref.set(0x56FDF344, 0xFD6D, 0x11D0, const [0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90]);
+      iid.ref.set(0xEA1AFB91, 0x9E28, 0x4B86, const [0x90, 0xE9, 0x9E, 0x9F, 0x8A, 0x5E, 0xEF, 0xAF]);
+      final hr = coCreate(clsid, nullptr, 1 /* CLSCTX_INPROC_SERVER */, iid, out);
+      if (hr < 0 || out.value == 0) {
+        _taskbarFailed = true;
+        return false;
+      }
+      final obj = out.value;
+      final hrInit = _vtblSlot<Int32 Function(IntPtr)>(obj, 3).asFunction<int Function(int)>()(obj);
+      if (hrInit < 0) {
+        _vtblSlot<Uint32 Function(IntPtr)>(obj, 2).asFunction<int Function(int)>()(obj);
+        _taskbarFailed = true;
+        return false;
+      }
+      _taskbar = obj;
+      return true;
+    } catch (_) {
+      _taskbarFailed = true;
+      return false;
+    } finally {
+      calloc.free(clsid);
+      calloc.free(iid);
+      calloc.free(out);
+    }
+  }
+
+  /// התקדמות בכפתור שורת המשימות. [value] בין 0 ל-1; null = לא ידוע (אינדיקציה מתמשכת).
+  void setProgress(double? value, {bool error = false, bool paused = false}) {
+    if (!Platform.isWindows) return;
+    try {
+      final int flags;
+      if (error) {
+        flags = _tbpfError;
+      } else if (paused) {
+        flags = _tbpfPaused;
+      } else if (value == null) {
+        flags = _tbpfIndeterminate;
+      } else {
+        flags = _tbpfNormal;
+      }
+      final v = value?.clamp(0.0, 1.0).toDouble();
+      if (flags == _lastFlags) {
+        final last = _lastValue;
+        // הצעד האחרון אל 0 או 1 תמיד נשלח, כדי שהפס לא ייעצר על 999/1000.
+        if (v == last || (v != null && last != null && v > 0 && v < 1 && (v - last).abs() < 0.002)) return;
+      }
+      if (!_ensureTaskbar()) return;
+      final obj = _taskbar;
+      var hrState = 0, hrValue = 0;
+      // מצב לפני ערך כשהמצב משתנה: אחרת SetProgressValue מחזיר לרגע "רגיל" ממצב שגיאה/השהיה.
+      void setState() => hrState = _vtblSlot<Int32 Function(IntPtr, IntPtr, Int32)>(
+        obj,
+        10,
+      ).asFunction<int Function(int, int, int)>()(obj, _hwnd, flags);
+      if (flags != _lastFlags) setState();
+      if (flags != _tbpfIndeterminate && v != null) {
+        hrValue = _vtblSlot<Int32 Function(IntPtr, IntPtr, Uint64, Uint64)>(
+          obj,
+          9,
+        ).asFunction<int Function(int, int, int, int)>()(obj, _hwnd, (v * 1000).round(), 1000);
+      }
+      // נכשל (למשל כפתור שורת המשימות עוד לא נוצר): לא שומרים, כדי שהקריאה הבאה תנסה שוב.
+      if (hrState < 0 || hrValue < 0) return;
+      _lastFlags = flags;
+      _lastValue = v;
+    } catch (_) {}
+  }
+
+  /// מנקה את ההתקדמות מכפתור שורת המשימות.
+  void clearProgress() {
+    if (!Platform.isWindows) return;
+    try {
+      _lastFlags = null;
+      _lastValue = null;
+      if (_taskbar == 0) return;
+      final obj = _taskbar;
+      _vtblSlot<Int32 Function(IntPtr, IntPtr, Int32)>(
+        obj,
+        10,
+      ).asFunction<int Function(int, int, int)>()(obj, _hwnd, _tbpfNoProgress);
+    } catch (_) {}
+  }
+
+  /// מהבהב בשורת המשימות עד שהמשתמש חוזר לחלון - רק אם החלון אינו בחזית.
+  void flashIfInactive() {
+    if (!Platform.isWindows) return;
+    Pointer<FlashWInfo>? info;
+    try {
+      final fg = _user32.lookupFunction<IntPtr Function(), int Function()>('GetForegroundWindow')();
+      if (fg == _hwnd) return;
+      info = calloc<FlashWInfo>();
+      info.ref
+        ..cbSize = sizeOf<FlashWInfo>()
+        ..hwnd = _hwnd
+        ..dwFlags =
+            2 /* FLASHW_TRAY: לחלון אין פס כותרת של המערכת */ | 0xC /* FLASHW_TIMERNOFG */
+        ..uCount = 0
+        ..dwTimeout = 0;
+      _user32.lookupFunction<Int32 Function(Pointer<FlashWInfo>), int Function(Pointer<FlashWInfo>)>(
+        'FlashWindowEx',
+      )(info);
+    } catch (_) {
+    } finally {
+      if (info != null) calloc.free(info);
+    }
+  }
+}
+
+/// GUID של COM (16 בתים).
+final class ComGuid extends Struct {
+  @Uint32()
+  external int data1;
+  @Uint16()
+  external int data2;
+  @Uint16()
+  external int data3;
+  @Array(8)
+  external Array<Uint8> data4;
+
+  void set(int d1, int d2, int d3, List<int> d4) {
+    data1 = d1;
+    data2 = d2;
+    data3 = d3;
+    for (var i = 0; i < 8; i++) {
+      data4[i] = d4[i];
+    }
+  }
+}
+
+/// FLASHWINFO של Windows (ב-x64 גודלו 32 בגלל ריפוד אחרי cbSize).
+final class FlashWInfo extends Struct {
+  @Uint32()
+  external int cbSize;
+  @IntPtr()
+  external int hwnd;
+  @Uint32()
+  external int dwFlags;
+  @Uint32()
+  external int uCount;
+  @Uint32()
+  external int dwTimeout;
 }
