@@ -271,6 +271,22 @@ void main() {
       expect(c.title, 'הכונן מעודכן');
     });
 
+    for (final installed in [true, false]) {
+      test('מחשב מחובר, הכונן מעודכן, המסד המקומי ${installed ? "מעודכן: אין" : "ישן: יש"} "עדכון במחשב זה"', () async {
+        final m = _manifest(52);
+        final steps = _steps(48, 52);
+        db.fakeRemote = _release(m);
+        db.fakeSteps = StepsRelease(Uint8List(0), '', steps);
+        db.fakeMirror = _release(m);
+        fillDrive(m, steps);
+        db.attachedPath = existing('local/$dbLibraryId.db');
+        db.installed = installed;
+        await c.start();
+        expect(c.phase, QuickPhase.done);
+        expect(c.canUpdateThisComputer, !installed);
+      });
+    }
+
     test('מחשב מחובר: כל הקבצים בכונן אבל המניפסט ישן — מציעים הורדה', () async {
       final m = _manifest(52);
       db.fakeRemote = _release(m);
