@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
@@ -11,6 +12,9 @@ import '../db/db_service.dart';
 import '../services/disk_space.dart';
 import '../services/net_errors.dart';
 import '../services/otzaria_locator.dart';
+import '../vectors/vector_set.dart' show LiveSet, isOurs;
+import '../vectors/vectors_controller.dart';
+import '../vectors/vectors_manifest.dart';
 import 'progress_rate.dart';
 import 'quick_log.dart';
 
@@ -20,6 +24,17 @@ enum QuickPhase { checking, ready, working, done, failed }
 /// מה יקרה בלחיצה על הכפתור: הורדה לכונן (מחשב מחובר), עדכון המסד, או התקנה ראשונה (בחירת מיקום).
 enum QuickAction { download, update, install }
 
+/// החיפוש החכם שבכונן מול המחשב הזה. none: אין בכונן (או שהוא למסד בגרסה אחרת). pending: אפשר להתקין.
+/// noOtzariaSet: באוצריא אין עדיין סט וקטורים. otherVersion: כבר מותקנת גרסה אחרת של וקטורי המאגר.
+enum SmartSearchState { none, pending, installed, noOtzariaSet, otherVersion }
+
+/// התשובה לשאלה "להוריד גם את החיפוש החכם?". [remember]: לא לשאול שוב.
+class SmartSearchAnswer {
+  const SmartSearchAnswer({required this.download, required this.remember});
+  final bool download;
+  final bool remember;
+}
+
 /// "עדכון מהיר": מה שקורה כשהתוכנה מופעלת מתוך עדכוני אוצריא (תוכנות נוספות).
 ///
 /// במחשב מחובר: בודק בכל פתיחה אם יש גרסה חדשה, ובלחיצה מוריד לכונן את המסד המלא ואת קובצי העדכון
@@ -28,16 +43,207 @@ enum QuickAction { download, update, install }
 class QuickUpdateController extends ChangeNotifier {
   /// [freeSpace]: בדיקת מקום פנוי בכונן (מוזרק בבדיקות, כדי לא להריץ תהליך חיצוני).
   /// [findOtzariaDb]: איפה אוצריא קוראת את המסד (מוזרק בבדיקות, כדי לא לקרוא את אוצריא של המחשב).
+  /// [smartSearch]: יוצר את בקר וקטורי החיפוש החכם; בלעדיו העדכון המהיר מטפל במסד בלבד.
   QuickUpdateController({
     required this.mirrorDir,
     DbController? db,
     Future<String?> Function()? findOtzariaDb,
+    VectorsController Function(DbController db)? smartSearch,
     Future<int?> Function(String path)? freeSpace,
   }) : db = db ?? DbController(AppController()..dataDir = p.dirname(mirrorDir)),
        _findOtzariaDb = findOtzariaDb ?? OtzariaLocator.findDbPath,
        _freeSpace = freeSpace ?? freeDiskSpace {
     this.db.autoInspect = false;
     this.db.addListener(_onDb);
+    vectors = smartSearch?.call(this.db)?..addListener(_onDb);
+  }
+
+  // ─── חיפוש חכם ────────────────────────────────────────────────────
+
+  /// וקטורי החיפוש החכם (חיפוש לפי משמעות) של המאגר: יורדים לכונן לצד המסד, ומותקנים באוצריא אחריו.
+  late final VectorsController? vectors;
+
+  /// הבחירה השמורה בהורדה לכונן: `true` = תמיד להוריד, `false` = לעולם לא, `null` = לשאול בכל פעם.
+  bool? smartSearchChoice;
+
+  /// שואל את המשתמש אם להוריד גם את החיפוש החכם (מוזרק מהמסך). `null` = המשתמש סגר בלי לבחור.
+  Future<SmartSearchAnswer?> Function(String size)? askSmartSearch;
+
+  /// קובץ הבחירה השמורה. נקבע מבחוץ (ברירת מחדל: בהגדרות המשתמש); `null` = לא שומרים (בבדיקות).
+  String? smartSearchSettingsPath;
+
+  bool _choiceLoaded = false;
+
+  void _loadSmartSearchChoice() {
+    if (_choiceLoaded) return;
+    _choiceLoaded = true;
+    final path = smartSearchSettingsPath;
+    if (path == null) return;
+    try {
+      final j = jsonDecode(File(path).readAsStringSync());
+      final v = j is Map ? j['smartSearch'] : null;
+      if (v is bool) smartSearchChoice = v;
+    } catch (_) {}
+  }
+
+  /// שומר (או מבטל, עם `null`) את הבחירה, כך שלא ישאלו שוב.
+  void setSmartSearchChoice(bool? v) {
+    smartSearchChoice = v;
+    QuickLog.info('חיפוש חכם: בחירה שמורה = ${v ?? "לשאול"}');
+    final path = smartSearchSettingsPath;
+    if (path != null) {
+      try {
+        Directory(p.dirname(path)).createSync(recursive: true);
+        File(path).writeAsStringSync(jsonEncode({'smartSearch': v}));
+      } catch (e) {
+        QuickLog.warn('שמירת הבחירה בחיפוש החכם נכשלה: $e');
+      }
+    }
+    // "שינוי" אחרי סיום: מציעים שוב את ההורדה (והשאלה תופיע בלחיצה).
+    if (v == null && phase == QuickPhase.done && online == true && !localMode && !_running && db.remote != null) {
+      _checkDrive();
+      return;
+    }
+    notifyListeners();
+  }
+
+  /// גודל החיפוש החכם שיורד לכונן (לשאלה ולתצוגה).
+  String get smartSearchSize {
+    final m = _onlineVectors;
+    return m == null ? '' : _size(m.downloadSize);
+  }
+
+  /// במצב הורדה, כשיש חיפוש חכם להוריד והבחירה שמורה: מוצגת שורה קטנה עם "שינוי".
+  /// (גם בסיום, כשהבחירה "לא" השאירה את הכונן בלעדיו.)
+  bool get showsSmartSearchChoice =>
+      ((phase == QuickPhase.ready && action == QuickAction.download) ||
+          (phase == QuickPhase.done && online == true && !localMode)) &&
+      smartSearchChoice != null &&
+      smartSearchMissing > 0;
+
+  /// ההחלטה להורדה הנוכחית (אחרי השאלה או מהבחירה השמורה).
+  bool _wantSmartSearch = false;
+
+  /// הפעולה שרצה כרגע: על החיפוש החכם או על המסד.
+  DbActivity? get activity => vectors?.activity ?? db.activity;
+
+  /// עצירת הפעולה הנוכחית.
+  void cancel() {
+    final v = vectors;
+    if (v != null && v.busy) {
+      v.cancel();
+    } else {
+      db.cancel();
+    }
+  }
+
+  Future<void>? _vectorsCheck;
+
+  /// בדיקת הוקטורים ברשת (מניפסט קטן). רצה במקביל לבדיקת המסד, ולא מעכבת את המצב בלי רשת.
+  Future<void> _startVectorsCheck() {
+    final v = vectors!;
+    if (!_vectorsInited) {
+      _vectorsInited = true;
+      return _vectorsCheck = v.init();
+    }
+    v.refreshMirror();
+    if (v.checking && _vectorsCheck != null) return _vectorsCheck!;
+    return _vectorsCheck = v.checkRemote();
+  }
+
+  bool _vectorsInited = false;
+
+  /// הוקטורים ברשת, כשהם בנויים בדיוק למסד שברשת (אחרת לא מורידים אותם).
+  VectorsManifest? get _onlineVectors {
+    final v = vectors;
+    if (v == null || v.remote == null || db.remote == null || v.remoteMismatch() != null) return null;
+    return v.remote!.manifest;
+  }
+
+  /// כמה בתים של החיפוש החכם חסרים בכונן (0 כשהוא כבר שלם שם, או כשאין מה להוריד).
+  int get smartSearchMissing {
+    final m = _onlineVectors;
+    if (m == null) return 0;
+    var missing = 0;
+    for (final f in m.files) {
+      final file = File(p.join(mirrorDir, f.file));
+      if (!(file.existsSync() && file.lengthSync() == f.size)) missing += f.size;
+    }
+    // הקבצים שלמים אבל המניפסט בכונן ישן: ההורדה רק תאמת אותם ותכתוב מניפסט.
+    if (missing == 0 && vectors!.mirror?.manifest.segment.id != m.segment.id) return 1;
+    return missing;
+  }
+
+  /// מצב החיפוש החכם במחשב הזה, מול מה שבכונן.
+  SmartSearchState get smartSearchLocal {
+    final v = vectors;
+    if (v == null) return SmartSearchState.none;
+    final r = v.mirror;
+    if (r == null || !v.preparedComplete) return SmartSearchState.none;
+    // וקטורים ישנים בכונן (למסד בגרסה אחרת מזו שבכונן) לא יתאימו למסד אחרי העדכון.
+    final dbVersion = db.mirror?.manifest.version;
+    if (dbVersion != null && r.manifest.dbVersion != dbVersion) return SmartSearchState.none;
+    final dir = v.vectorsDir;
+    if (dir == null || !File(p.join(dir, 'CURRENT')).existsSync()) return SmartSearchState.noOtzariaSet;
+    try {
+      final segs = LiveSet.open(dir).segments;
+      if (segs.any((s) => s['id'] == r.manifest.segment.id)) return SmartSearchState.installed;
+      if (segs.any(isOurs)) return SmartSearchState.otherVersion;
+    } catch (e) {
+      QuickLog.warn('חיפוש חכם: קריאת הסט של אוצריא נכשלה: $e');
+      return SmartSearchState.noOtzariaSet;
+    }
+    return SmartSearchState.pending;
+  }
+
+  /// אחרי סיום: החיפוש החכם לא הותקן כי אוצריא פתוחה, ואפשר לנסות שוב אחרי שסוגרים אותה.
+  bool canRetrySmartSearch = false;
+
+  Future<void> retrySmartSearch() async {
+    if (!canRetrySmartSearch || _running || _disposed) return;
+    canRetrySmartSearch = false;
+    final t = title, d = detail;
+    await _guard(() async {
+      final w = await _installSmartSearch();
+      _done(t, d, warning: w);
+    });
+  }
+
+  /// מתקין אוטומטית את החיפוש החכם מהכונן, כשבאוצריא במחשב הזה כבר מופעל חיפוש חכם.
+  /// כשאין (או כשכבר מותקנת גרסה אחרת) מדלגים בשקט — רק בלוג. מחזיר הערה למשתמש, או `null`.
+  Future<String?> _installSmartSearch() async {
+    final v = vectors;
+    if (v == null) return null;
+    v.refreshMirror();
+    final state = smartSearchLocal;
+    QuickLog.info('חיפוש חכם: ${state.name}');
+    if (state != SmartSearchState.pending) return null;
+    if (await OtzariaLocator.isRunning()) {
+      canRetrySmartSearch = true;
+      return 'כדי להתקין את החיפוש החכם צריך לסגור את אוצריא. סגרו אותה ולחצו "התקנת החיפוש החכם".';
+    }
+    await v.install();
+    QuickLog.info('חיפוש חכם: ${v.messageIsError ? "נכשל" : "הסתיים"} — ${v.message}');
+    final msg = v.message;
+    v.clearMessage();
+    if (v.messageIsError) return 'החיפוש החכם לא הותקן: $msg';
+    // נעצר על ידי המשתמש: לא מותקן, ואפשר להפעיל שוב.
+    if (smartSearchLocal != SmartSearchState.installed) return msg;
+    return null;
+  }
+
+  /// מוריד את החיפוש החכם לכונן אחרי המסד. מחזיר הערה כשלא הצליח.
+  Future<String?> _downloadSmartSearch() async {
+    final v = vectors;
+    if (v == null || !_wantSmartSearch || smartSearchMissing == 0) return null;
+    QuickLog.info('חיפוש חכם: הורדה לכונן');
+    await v.prepare(folder: mirrorDir);
+    QuickLog.info('חיפוש חכם: ${v.messageIsError ? "נכשל" : "הסתיים"} — ${v.message}');
+    final msg = v.message;
+    final error = v.messageIsError;
+    v.clearMessage();
+    if (smartSearchMissing == 0) return null;
+    return error ? 'המסד מוכן, אבל החיפוש החכם לא הורד: $msg' : 'הורדת החיפוש החכם נעצרה. אפשר להפעיל שוב ולהשלים אותה.';
   }
 
   /// כמה זמן מחכים לשרת לפני שמציעים לדלג על הרשת ולעדכן מהכונן.
@@ -47,7 +253,7 @@ class QuickUpdateController extends ChangeNotifier {
   final ProgressRate rate = ProgressRate();
 
   void _onDb() {
-    final a = db.activity;
+    final a = activity;
     if (a == null || a.total == null || a.total! <= 0) {
       rate.reset();
     } else if (!_verifying(a)) {
@@ -73,7 +279,7 @@ class QuickUpdateController extends ChangeNotifier {
 
   /// שורת "12.3 MB/s · עוד כ-3 דק'" בזמן פעולה; ריקה כשאין עדיין הערכה.
   String get rateText {
-    final a = db.activity;
+    final a = activity;
     if (a == null || phase != QuickPhase.working || _verifying(a)) return '';
     final parts = <String>[];
     final speed = rate.bytesPerSecond;
@@ -239,7 +445,34 @@ class QuickUpdateController extends ChangeNotifier {
   /// מחשב מחובר אחרי שהכונן מוכן: מעדכנים מאותו כונן גם את המסד שבמחשב הזה.
   bool localMode = false;
 
-  bool get canUpdateThisComputer => phase == QuickPhase.done && online == true && !localMode;
+  /// מחשב מחובר: המסד שמצורף לאוצריא כאן כבר בגרסה האחרונה (נבדק ב-[_probeLocal]).
+  /// בלי הבדיקה הזו "עדכון במחשב זה" הוצע בכל פתיחה, ובלחיצה רק התגלה שהמסד מעודכן.
+  bool _localUpToDate = false;
+
+  bool get canUpdateThisComputer =>
+      phase == QuickPhase.done &&
+      online == true &&
+      !localMode &&
+      (!_localUpToDate || smartSearchLocal == SmartSearchState.pending);
+
+  /// מחשב מחובר: האם המסד שמצורף לאוצריא במחשב הזה כבר מעודכן (SHA שמור, או חישוב פעם אחת).
+  Future<void> _probeLocal() async {
+    _localUpToDate = false;
+    final attached = db.otzariaDbPath;
+    // לא מותקן כאן: משאירים את הכפתור (הוא מוביל להתקנה ראשונה).
+    if (attached == null || !_existsSync(attached)) return;
+    try {
+      if (db.targetDb != attached) {
+        await db.setTarget(attached);
+        if (_disposed || db.targetDb != attached) return;
+      }
+      await db.inspectTarget();
+      _localUpToDate = db.plan?.action == InstallAction.none;
+      QuickLog.info('מסד מקומי (מחשב מחובר): ${_localUpToDate ? "מעודכן" : "לא מעודכן"} — ${db.plan?.message}');
+    } catch (e) {
+      QuickLog.warn('זיהוי המסד המקומי נכשל: $e');
+    }
+  }
 
   String get message => note ?? db.message ?? '';
 
@@ -260,10 +493,13 @@ class QuickUpdateController extends ChangeNotifier {
     action = null;
     localMode = false;
     _offlineForced = false;
+    canRetrySmartSearch = false;
     db.clearMessage();
     phase = QuickPhase.checking;
     notifyListeners();
     try {
+      _loadSmartSearchChoice();
+      final vectorsCheck = vectors == null ? null : _startVectorsCheck();
       bool skipped;
       if (!_inited) {
         _inited = true;
@@ -290,7 +526,22 @@ class QuickUpdateController extends ChangeNotifier {
         '${db.mirrorError == null ? "" : " (שגיאת כונן: ${db.mirrorError})"}'
         ', תיקיית הכונן: $mirrorDir, מצורף לאוצריא: ${db.otzariaDbPath}, יעד: ${db.targetDb}',
       );
+      if (online! && vectorsCheck != null) {
+        // המניפסט קטן; אם הוא מתעכב, ממשיכים עם המסד בלבד.
+        try {
+          await vectorsCheck.timeout(const Duration(seconds: 20));
+        } catch (_) {}
+        if (_disposed) return;
+        vectors!.refreshMirror();
+        QuickLog.info(
+          'חיפוש חכם: ברשת למסד ${vectors!.remote?.manifest.dbVersion}'
+          '${vectors!.remoteError == null ? "" : " (${vectors!.remoteError})"}'
+          ', בכונן למסד ${vectors!.mirror?.manifest.dbVersion}',
+        );
+      }
       if (online!) {
+        await _probeLocal();
+        if (_disposed) return;
         _checkDrive();
       } else {
         await _checkLocal();
@@ -307,9 +558,15 @@ class QuickUpdateController extends ChangeNotifier {
     final m = db.remote!.manifest;
     _driveList = driveSet(m, db.remoteSteps?.manifest);
     final missing = missingBytes(_driveList, mirrorDir);
-    QuickLog.info('כונן: ${_driveList.length} קבצים ברשימה, חסרים $missing בתים');
+    final smart = smartSearchMissing;
+    QuickLog.info('כונן: ${_driveList.length} קבצים ברשימה, חסרים $missing בתים (חיפוש חכם: $smart)');
     if (missing == 0 && db.mirror?.manifest.version == m.version) {
-      _done('הכונן מעודכן', 'גרסה ${m.version}');
+      if (smart == 0 || smartSearchChoice == false) {
+        _done('הכונן מעודכן', 'גרסה ${m.version}');
+      } else {
+        // המסד בכונן מעודכן, וחסר רק החיפוש החכם.
+        _ready(QuickAction.download, 'החיפוש החכם זמין', 'המסד בכונן מעודכן (גרסה ${m.version})');
+      }
       return;
     }
     _ready(QuickAction.download, 'גרסה ${m.version} זמינה', missing == 0 ? '' : '${_size(missing)} להורדה');
@@ -361,9 +618,15 @@ class QuickUpdateController extends ChangeNotifier {
     }
     switch (plan.action) {
       case InstallAction.none:
+        // המסד מעודכן, אבל החיפוש החכם שבכונן עוד לא הותקן כאן: מציעים אותו (ההתקנה עוברת ב-[_install]).
+        if (!runUpdate && smartSearchLocal == SmartSearchState.pending) {
+          _ready(QuickAction.update, 'החיפוש החכם זמין', 'המסד מעודכן (גרסה $v)');
+          return;
+        }
         // מעודכן, אבל אולי עוד לא מצורף לאוצריא (למשל הותקן ידנית).
         final extra = await db.ensureAttached();
-        _done('המסד מעודכן', 'גרסה $v', warning: _warningFrom(extra));
+        final smart = runUpdate ? await _installSmartSearch() : null;
+        _done('המסד מעודכן', 'גרסה $v', warning: _joinWarnings(_warningFrom(extra), smart));
       case InstallAction.blocked:
         _fail('${plan.message}\nהפעילו את התוכנה במחשב מחובר כדי להשלים את הקבצים בכונן.');
       case InstallAction.delta:
@@ -399,6 +662,7 @@ class QuickUpdateController extends ChangeNotifier {
     if (phase != QuickPhase.ready || _running || _disposed) return;
     switch (action) {
       case QuickAction.download:
+        if (!await _decideSmartSearch()) return;
         await _guard(_download);
       case QuickAction.update:
         await _guard(_install);
@@ -407,6 +671,27 @@ class QuickUpdateController extends ChangeNotifier {
       case null:
         return;
     }
+  }
+
+  /// לפני הורדה לכונן: האם להוריד גם את החיפוש החכם — מהבחירה השמורה, ואחרת שואלים.
+  /// מחזיר `false` כשהמשתמש סגר את השאלה בלי לבחור (לא מתחילים).
+  Future<bool> _decideSmartSearch() async {
+    _wantSmartSearch = false;
+    if (smartSearchMissing == 0) return true;
+    final saved = smartSearchChoice;
+    if (saved != null) {
+      _wantSmartSearch = saved;
+      return true;
+    }
+    final ask = askSmartSearch;
+    if (ask == null) return true;
+    final a = await ask(smartSearchSize);
+    if (_disposed || a == null) return false;
+    _wantSmartSearch = a.download;
+    QuickLog.info('חיפוש חכם: ${a.download ? "להוריד" : "לא להוריד"}${a.remember ? " (לזכור)" : ""}');
+    if (a.remember) setSmartSearchChoice(a.download);
+    // נשאר במצב "מוכן", אבל המסד בכונן כבר מעודכן והחיפוש החכם לא נבחר: אין מה להוריד.
+    return true;
   }
 
   /// התקנה ראשונה בתיקייה שהמשתמש בחר.
@@ -448,26 +733,38 @@ class QuickUpdateController extends ChangeNotifier {
   Future<void> _download() async {
     final m = db.remote!.manifest;
     final missing = missingBytes(_driveList, mirrorDir);
-    if (missing > 0) {
+    final smart = _wantSmartSearch ? smartSearchMissing : 0;
+    final need = missing + smart;
+    if (need > 0) {
       final free = await _freeSpace(p.join(mirrorDir, 'x'));
-      if (free != null && free < missing + 64 * 1024 * 1024) {
+      if (free != null && free < need + 64 * 1024 * 1024) {
         _fail(
-          'אין מספיק מקום פנוי בכונן. דרושים ${_size(missing)}, '
+          'אין מספיק מקום פנוי בכונן. דרושים ${_size(need)}, '
           'ופנויים ${_size(free)}.',
         );
         return;
       }
     }
-    QuickLog.info('הורדה לכונן: מתחיל (${_size(missing)} חסרים)');
-    final ok = await db.downloadArtifacts(_driveList, title: 'מוריד', doneMessage: '');
-    QuickLog.info('הורדה לכונן: ${ok ? "הושלמה" : "לא הושלמה: ${db.message}"}');
-    if (_disposed) return;
-    if (!ok) {
-      _fail(null);
-      return;
+    // המסד בכונן כבר מעודכן (וחסר רק החיפוש החכם): לא מורידים אותו שוב.
+    if (missing > 0 || db.mirror?.manifest.version != m.version) {
+      QuickLog.info('הורדה לכונן: מתחיל (${_size(missing)} חסרים)');
+      final ok = await db.downloadArtifacts(_driveList, title: 'מוריד', doneMessage: '');
+      QuickLog.info('הורדה לכונן: ${ok ? "הושלמה" : "לא הושלמה: ${db.message}"}');
+      if (_disposed) return;
+      if (!ok) {
+        _fail(null);
+        return;
+      }
+      await pruneOldPatches(mirrorDir, _driveList);
     }
-    await pruneOldPatches(mirrorDir, _driveList);
-    _done('הכונן מוכן', 'גרסה ${m.version} · אפשר לעבור למחשב ללא רשת');
+    final smartNote = await _downloadSmartSearch();
+    if (_disposed) return;
+    final withSmart = vectors != null && _onlineVectors != null && smartSearchMissing == 0;
+    _done(
+      'הכונן מוכן',
+      'גרסה ${m.version}${withSmart ? ' · כולל חיפוש חכם' : ''} · אפשר לעבור למחשב ללא רשת',
+      warning: smartNote,
+    );
   }
 
   Future<void> _install() async {
@@ -477,7 +774,9 @@ class QuickUpdateController extends ChangeNotifier {
     // בתיקייה שנבחרה כבר יש מסד עדכני: רק מצרפים אותו לאוצריא.
     if (plan?.action == InstallAction.none) {
       final extra = await db.ensureAttached();
-      _done('המסד מעודכן', 'גרסה ${_version ?? ''}', warning: _warningFrom(extra));
+      final smart = await _installSmartSearch();
+      if (_disposed) return;
+      _done('המסד מעודכן', _withSmartDetail('גרסה ${_version ?? ''}'), warning: _joinWarnings(_warningFrom(extra), smart));
       return;
     }
     if (plan == null || !plan.canRun) {
@@ -501,7 +800,22 @@ class QuickUpdateController extends ChangeNotifier {
     }
     final msg = db.message ?? '';
     final nl = msg.indexOf('\n');
-    _done('המסד עודכן', 'גרסה ${_version ?? ''}', warning: nl < 0 ? null : msg.substring(nl + 1));
+    final smart = await _installSmartSearch();
+    if (_disposed) return;
+    _done(
+      'המסד עודכן',
+      _withSmartDetail('גרסה ${_version ?? ''}'),
+      warning: _joinWarnings(nl < 0 ? null : msg.substring(nl + 1), smart),
+    );
+  }
+
+  /// "· החיפוש החכם מותקן" כשהותקן בפעולה הזו (או כבר היה מותקן) ונבחר.
+  String _withSmartDetail(String d) =>
+      vectors != null && smartSearchLocal == SmartSearchState.installed ? '$d · החיפוש החכם מותקן' : d;
+
+  static String? _joinWarnings(String? a, String? b) {
+    final parts = [a, b].whereType<String>().where((s) => s.trim().isNotEmpty).toList();
+    return parts.isEmpty ? null : parts.join('\n\n');
   }
 
   /// גודל בבידוד כיווניות (LRI…PDI): בלעדיו "935.1 MB" מוצג הפוך בשורה עברית.
@@ -622,6 +936,8 @@ class QuickUpdateController extends ChangeNotifier {
     _tick?.cancel();
     final skip = _skip;
     if (skip != null && !skip.isCompleted) skip.complete();
+    vectors?.removeListener(_onDb);
+    vectors?.dispose();
     db.removeListener(_onDb);
     db.dispose();
     super.dispose();

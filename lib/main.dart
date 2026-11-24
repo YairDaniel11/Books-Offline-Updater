@@ -13,6 +13,7 @@ import 'src/quick/quick_update_controller.dart';
 import 'src/quick/quick_update_screen.dart';
 import 'src/quick/quick_window.dart';
 import 'src/quick/windows_registration.dart';
+import 'src/vectors/vectors_controller.dart';
 import 'src/services/app_paths.dart';
 import 'src/update/app_update.dart' show appVersion;
 import 'src/services/single_instance.dart';
@@ -98,7 +99,10 @@ class QuickUpdateApp extends StatefulWidget {
 }
 
 class _QuickUpdateAppState extends State<QuickUpdateApp> {
-  late final QuickUpdateController _quick = QuickUpdateController(mirrorDir: widget.mirrorDir);
+  late final QuickUpdateController _quick = QuickUpdateController(
+    mirrorDir: widget.mirrorDir,
+    smartSearch: VectorsController.new,
+  )..smartSearchSettingsPath = p.join(AppPaths.userConfigDir(), 'quick_settings.json');
 
   @override
   void dispose() {

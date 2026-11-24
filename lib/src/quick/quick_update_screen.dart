@@ -83,6 +83,7 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
     super.initState();
     _lifecycle;
     c.db.confirm = _confirm;
+    c.askSmartSearch = _askSmartSearch;
     c.addListener(_syncTaskbar);
     if (widget.autoStart) WidgetsBinding.instance.addPostFrameCallback((_) => c.start());
   }
@@ -110,7 +111,7 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
     if (w == null) return;
     switch (phase) {
       case QuickPhase.working:
-        final a = c.db.activity;
+        final a = c.activity;
         final value = a?.progress ?? (c.db.inspecting ? c.db.inspectProgress : null);
         w.setProgress(value, paused: a?.cancelled == true);
       case QuickPhase.failed:
@@ -134,6 +135,7 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
       case QuickPhase.ready:
         return c.action == null ? null : c.run;
       case QuickPhase.done:
+        if (c.canRetrySmartSearch) return c.retrySmartSearch;
         return c.canUpdateThisComputer ? c.updateThisComputer : _close;
       case QuickPhase.failed:
         return c.start;
@@ -202,6 +204,11 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
     } else {
       exit(0);
     }
+  }
+
+  Future<SmartSearchAnswer?> _askSmartSearch(String size) async {
+    if (!mounted) return null;
+    return showDialog<SmartSearchAnswer>(context: context, builder: (ctx) => _SmartSearchDialog(size: size));
   }
 
   Future<bool> _confirm(String message) async {
@@ -337,6 +344,7 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
               const SizedBox(height: 16),
               _Location(path: c.installFolder, onChange: c.running ? null : _changeLocation),
             ],
+            if (c.showsSmartSearchChoice) ...[const SizedBox(height: 8), _smartChoice()],
             if (notes.isNotEmpty) ...[const SizedBox(height: 14), _ReleaseNotes(text: notes)],
           ],
         );
@@ -350,6 +358,7 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
             const SizedBox(height: 14),
             _Lines(title: c.title, detail: c.detail),
             if (c.warning != null) ...[const SizedBox(height: 12), _Note(text: c.warning!)],
+            if (c.showsSmartSearchChoice) ...[const SizedBox(height: 8), _smartChoice()],
           ],
         );
       case QuickPhase.failed:
@@ -380,6 +389,16 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
         );
     }
   }
+
+  /// הבחירה השמורה בחיפוש החכם, עם "שינוי" (חוזרים לשאול).
+  Widget _smartChoice() => Wrap(
+    alignment: WrapAlignment.center,
+    crossAxisAlignment: WrapCrossAlignment.center,
+    children: [
+      Text(c.smartSearchChoice == true ? 'החיפוש החכם יורד תמיד' : 'החיפוש החכם לא יורד', style: _faint),
+      _LinkButton(text: 'שינוי', onPressed: () => c.setSmartSearchChoice(null)),
+    ],
+  );
 
   /// מעתיק את ההודעה, הפרטים הטכניים ומיקום הלוג — לצירוף לדיווח על תקלה.
   Future<void> _copyDetails() async {
@@ -423,12 +442,27 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
           null => const SizedBox.shrink(),
         };
       case QuickPhase.working:
-        final a = c.db.activity;
+        final a = c.activity;
         return _GhostButton(
           text: a?.cancelled == true ? 'עוצר...' : 'עצירה',
-          onPressed: a == null || a.cancelled ? null : c.db.cancel,
+          onPressed: a == null || a.cancelled ? null : c.cancel,
         );
       case QuickPhase.done:
+        if (c.canRetrySmartSearch) {
+          return Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: _PrimaryButton(text: 'התקנת החיפוש החכם', onPressed: c.running ? null : c.retrySmartSearch),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: _GhostButton(text: 'סגירה', onPressed: _close),
+              ),
+            ],
+          );
+        }
         if (c.canUpdateThisComputer) {
           return Row(
             children: [
@@ -719,7 +753,7 @@ class _Progress extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final a = c.db.activity;
+    final a = c.activity;
     final inspecting = a == null && c.db.inspecting;
     final value = a?.progress ?? (inspecting ? c.db.inspectProgress : null);
     final title = a?.title ?? (inspecting ? 'מזהה את גרסת המסד' : 'מתכונן');
@@ -815,6 +849,53 @@ class _Location extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// "להוריד גם את החיפוש החכם?" עם "לזכור את הבחירה". סגירה בלי בחירה מחזירה `null`.
+class _SmartSearchDialog extends StatefulWidget {
+  const _SmartSearchDialog({required this.size});
+  final String size;
+
+  @override
+  State<_SmartSearchDialog> createState() => _SmartSearchDialogState();
+}
+
+class _SmartSearchDialogState extends State<_SmartSearchDialog> {
+  bool _remember = false;
+
+  @override
+  Widget build(BuildContext context) {
+    void answer(bool download) =>
+        Navigator.of(context).pop(SmartSearchAnswer(download: download, remember: _remember));
+    return AlertDialog(
+      title: const Text('להוריד גם את החיפוש החכם?', style: _title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'חיפוש לפי משמעות בספרי המאגר, בתוך אוצריא'
+            '${widget.size.isEmpty ? '' : ' (${widget.size})'}.\n'
+            'במחשב ללא רשת הוא יותקן אוטומטית, אם החיפוש החכם של אוצריא מופעל שם.',
+            style: _muted,
+          ),
+          const SizedBox(height: 8),
+          CheckboxListTile(
+            value: _remember,
+            onChanged: (v) => setState(() => _remember = v ?? false),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('לזכור את הבחירה ולא לשאול שוב', style: TextStyle(fontSize: 13)),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => answer(false), child: const Text('לא')),
+        FilledButton(onPressed: () => answer(true), child: const Text('כן, להוריד')),
+      ],
     );
   }
 }
