@@ -76,7 +76,7 @@ void _startQuickLog(List<String> args) {
   QuickLog.init(p.join(dir, 'logs'));
   QuickLog.info(
     '─── הפעלה: גרסה ${appVersion.isEmpty ? '(פיתוח)' : appVersion}, '
-    'Windows ${Platform.operatingSystemVersion}, תיקייה: $dir, exe: ${Platform.resolvedExecutable}, '
+    '${Platform.operatingSystem} ${Platform.operatingSystemVersion}, תיקייה: $dir, exe: ${Platform.resolvedExecutable}, '
     'TEMP: ${Platform.environment['TEMP']}, ארגומנטים: $args',
   );
   final previous = FlutterError.onError;

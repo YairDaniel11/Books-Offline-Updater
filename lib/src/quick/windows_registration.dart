@@ -28,7 +28,7 @@ class WindowsRegistration {
     'DisplayName': 'BooksOfflineUpdate - מאגר ספרים לא רשמי לאוצריא',
     if (version.isNotEmpty) 'DisplayVersion': version,
     'Publisher': 'Books-Offline-Updater',
-    'InstallLocation': p.dirname(exePath),
+    'InstallLocation': p.windows.dirname(exePath),
     'DisplayIcon': exePath,
     'UninstallString': '"$exePath" $unregisterArg',
     'NoModify': 1,

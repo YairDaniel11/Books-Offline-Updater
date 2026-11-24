@@ -265,7 +265,7 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
           onKeyEvent: _onKey,
           child: Column(
             children: [
-              // בלי החלון הקומפקטי (macOS, או כשהגדרתו נכשלה) יש פס כותרת של המערכת; לא מציירים שני פסים.
+              // פס כותרת מצויר רק כשהחלון הקומפקטי של Windows הוגדר. ב-Mac (או כשההגדרה נכשלה) יש מסגרת מערכת רגילה.
               if (QuickWindow.instance != null) _TitleBar(onClose: _close),
               Expanded(
                 child: LayoutBuilder(
@@ -380,7 +380,7 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
               Wrap(
                 alignment: WrapAlignment.center,
                 children: [
-                  if (QuickLog.path != null && Platform.isWindows)
+                  if (QuickLog.path != null && (Platform.isWindows || Platform.isMacOS))
                     _LinkButton(text: 'פתיחת קובץ הלוג', onPressed: _openLog),
                   _LinkButton(text: 'העתקת פרטי התקלה', onPressed: _copyDetails),
                 ],
@@ -419,7 +419,11 @@ class _QuickUpdateScreenState extends State<QuickUpdateScreen> {
     final path = QuickLog.path;
     if (path == null) return;
     try {
-      Process.run('explorer.exe', ['/select,', path]);
+      if (Platform.isMacOS) {
+        Process.run('open', ['-R', path]);
+      } else {
+        Process.run('explorer.exe', ['/select,', path]);
+      }
     } catch (e) {
       QuickLog.warn('פתיחת הלוג נכשלה: $e');
     }

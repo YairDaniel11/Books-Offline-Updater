@@ -41,6 +41,7 @@ class SmartSearchAnswer {
 /// של עד [stepsBack] הגרסאות האחרונות. במחשב בלי רשת: בלחיצה מעדכן את המסד מהכונן, ובפעם הראשונה
 /// מתקין אותו במיקום שהמשתמש בוחר.
 class QuickUpdateController extends ChangeNotifier {
+  /// [freeSpace]: בדיקת מקום פנוי בכונן (מוזרק בבדיקות, כדי לא להריץ תהליך חיצוני).
   /// [findOtzariaDb]: איפה אוצריא קוראת את המסד (מוזרק בבדיקות, כדי לא לקרוא את אוצריא של המחשב).
   /// [smartSearch]: יוצר את בקר וקטורי החיפוש החכם; בלעדיו העדכון המהיר מטפל במסד בלבד.
   QuickUpdateController({
@@ -48,8 +49,10 @@ class QuickUpdateController extends ChangeNotifier {
     DbController? db,
     Future<String?> Function()? findOtzariaDb,
     VectorsController Function(DbController db)? smartSearch,
+    Future<int?> Function(String path)? freeSpace,
   }) : db = db ?? DbController(AppController()..dataDir = p.dirname(mirrorDir)),
-       _findOtzariaDb = findOtzariaDb ?? OtzariaLocator.findDbPath {
+       _findOtzariaDb = findOtzariaDb ?? OtzariaLocator.findDbPath,
+       _freeSpace = freeSpace ?? freeDiskSpace {
     this.db.autoInspect = false;
     this.db.addListener(_onDb);
     vectors = smartSearch?.call(this.db)?..addListener(_onDb);
@@ -399,6 +402,7 @@ class QuickUpdateController extends ChangeNotifier {
   final String mirrorDir;
   final DbController db;
   final Future<String?> Function() _findOtzariaDb;
+  final Future<int?> Function(String path) _freeSpace;
 
   QuickPhase phase = QuickPhase.checking;
   QuickAction? action;
@@ -732,7 +736,7 @@ class QuickUpdateController extends ChangeNotifier {
     final smart = _wantSmartSearch ? smartSearchMissing : 0;
     final need = missing + smart;
     if (need > 0) {
-      final free = await freeDiskSpace(p.join(mirrorDir, 'x'));
+      final free = await _freeSpace(p.join(mirrorDir, 'x'));
       if (free != null && free < need + 64 * 1024 * 1024) {
         _fail(
           'אין מספיק מקום פנוי בכונן. דרושים ${_size(need)}, '

@@ -110,6 +110,9 @@ class _FakeDb extends DbController {
   Future<void> install({String title = ''}) async => installed = true;
 }
 
+/// מקום פנוי "לא ידוע": בלי הרצת df אמיתי (נכשל ב-macOS ב-CI).
+Future<int?> _noDf(String _) async => null;
+
 void main() {
   late Directory tmp;
   late Duration savedSlow;
@@ -218,7 +221,7 @@ void main() {
         ..fakeMirror = _release(_manifest(52, notes: 'חדשות מהכונן'))
         ..fakeRemote = _release(_manifest(53, notes: 'חדשות מהרשת'))
         ..attachedPath = existing('otz.db');
-      c = QuickUpdateController(mirrorDir: tmp.path, db: db, findOtzariaDb: () async => db.attachedPath);
+      c = QuickUpdateController(freeSpace: _noDf, mirrorDir: tmp.path, db: db, findOtzariaDb: () async => db.attachedPath);
     });
     tearDown(() => c.dispose());
 
@@ -339,7 +342,7 @@ void main() {
         ..fakeMirror = _release(_manifest(52))
         ..attachedPath = existing('otz.db')
         ..setTargetError = Exception('raw-boom-text');
-      final c = QuickUpdateController(mirrorDir: tmp.path, db: db, findOtzariaDb: () async => db.attachedPath);
+      final c = QuickUpdateController(freeSpace: _noDf, mirrorDir: tmp.path, db: db, findOtzariaDb: () async => db.attachedPath);
       await c.start();
       expect(c.phase, QuickPhase.failed);
       expect(c.message, 'אירעה שגיאה לא צפויה.');
@@ -354,7 +357,7 @@ void main() {
       final db = _FakeDb()
         ..fakeMirror = _release(_manifest(52, notes: '  תיקון ספרים  '))
         ..attachedPath = existing('otz.db');
-      final c = QuickUpdateController(mirrorDir: tmp.path, db: db, findOtzariaDb: () async => db.attachedPath);
+      final c = QuickUpdateController(freeSpace: _noDf, mirrorDir: tmp.path, db: db, findOtzariaDb: () async => db.attachedPath);
       await c.start();
       expect(c.phase, QuickPhase.ready);
       expect(c.detail.contains('עדכון חלקי') || c.detail.contains('החלפת המסד כולו'), isTrue, reason: c.detail);
@@ -368,7 +371,7 @@ void main() {
       final db = _FakeDb()
         ..fakeMirror = _release(_manifest(52))
         ..attachedPath = existing('otz.db');
-      final c = QuickUpdateController(mirrorDir: tmp.path, db: db, findOtzariaDb: () async => db.attachedPath);
+      final c = QuickUpdateController(freeSpace: _noDf, mirrorDir: tmp.path, db: db, findOtzariaDb: () async => db.attachedPath);
       await c.start();
       expect(c.releaseNotes, isEmpty);
       c.dispose();
@@ -404,22 +407,22 @@ void main() {
 
     // השדה השני: טקסט הכפתור שחייב להופיע.
     final phases = <(String, String?, Future<QuickUpdateController> Function(_FakeDb, Directory))>[
-      ('בדיקה', null, (db, d) async => QuickUpdateController(mirrorDir: d.path, db: db)),
+      ('בדיקה', null, (db, d) async => QuickUpdateController(freeSpace: _noDf, mirrorDir: d.path, db: db)),
       ('מוכן להתקנה עם מיקום', 'התקנה', (db, d) async {
         db
           ..fakeMirror = _release(_manifest(52))
           ..initialTarget = p.join(d.path, 'none', 'x.db');
-        return QuickUpdateController(mirrorDir: d.path, db: db, findOtzariaDb: () async => null);
+        return QuickUpdateController(freeSpace: _noDf, mirrorDir: d.path, db: db, findOtzariaDb: () async => null);
       }),
       ('מוכן עם הערות ארוכות', 'עדכון', (db, d) async {
         db
           ..fakeMirror = _release(_manifest(52, notes: longNotes))
           ..attachedPath = (File(p.join(d.path, 'o.db'))..createSync()).path;
-        return QuickUpdateController(mirrorDir: d.path, db: db, findOtzariaDb: () async => db.attachedPath);
+        return QuickUpdateController(freeSpace: _noDf, mirrorDir: d.path, db: db, findOtzariaDb: () async => db.attachedPath);
       }),
-      ('עבודה עם התקדמות', 'עצירה', (db, d) async => QuickUpdateController(mirrorDir: d.path, db: db)),
-      ('סיום עם אזהרה', 'סגירה', (db, d) async => QuickUpdateController(mirrorDir: d.path, db: db)),
-      ('כשל עם הודעה ארוכה', 'נסו שוב', (db, d) async => QuickUpdateController(mirrorDir: d.path, db: db)),
+      ('עבודה עם התקדמות', 'עצירה', (db, d) async => QuickUpdateController(freeSpace: _noDf, mirrorDir: d.path, db: db)),
+      ('סיום עם אזהרה', 'סגירה', (db, d) async => QuickUpdateController(freeSpace: _noDf, mirrorDir: d.path, db: db)),
+      ('כשל עם הודעה ארוכה', 'נסו שוב', (db, d) async => QuickUpdateController(freeSpace: _noDf, mirrorDir: d.path, db: db)),
     ];
 
     for (final scale in [1.0, 1.3]) {
@@ -477,7 +480,7 @@ void main() {
         ..gate = Completer<void>()
         ..fakeMirror = _release(_manifest(52))
         ..attachedPath = existing('o.db');
-      final c = QuickUpdateController(mirrorDir: tmp.path, db: db, findOtzariaDb: () async => db.attachedPath);
+      final c = QuickUpdateController(freeSpace: _noDf, mirrorDir: tmp.path, db: db, findOtzariaDb: () async => db.attachedPath);
       await t.pumpWidget(host(QuickUpdateScreen(controller: c, autoStart: false, onClose: () {})));
       late Future<void> started;
       await t.runAsync(() async {
@@ -499,7 +502,7 @@ void main() {
       await t.binding.setSurfaceSize(const Size(400, 620));
       addTearDown(() => t.binding.setSurfaceSize(null));
       final db = _FakeDb()..fakeRemote = _release(_manifest(52));
-      final c = QuickUpdateController(mirrorDir: tmp.path, db: db);
+      final c = QuickUpdateController(freeSpace: _noDf, mirrorDir: tmp.path, db: db);
       await t.pumpWidget(host(QuickUpdateScreen(controller: c, autoStart: false, onClose: () {})));
       await startIt(t, c);
       expect(c.phase, QuickPhase.ready);
@@ -514,7 +517,7 @@ void main() {
       await t.binding.setSurfaceSize(const Size(400, 620));
       addTearDown(() => t.binding.setSurfaceSize(null));
       final db = _FakeDb()..fakeRemote = _release(_manifest(52));
-      final c = QuickUpdateController(mirrorDir: tmp.path, db: db);
+      final c = QuickUpdateController(freeSpace: _noDf, mirrorDir: tmp.path, db: db);
       var closed = 0;
       await t.pumpWidget(host(QuickUpdateScreen(controller: c, autoStart: false, onClose: () => closed++)));
       await startIt(t, c);
@@ -531,7 +534,7 @@ void main() {
       await t.binding.setSurfaceSize(const Size(400, 620));
       addTearDown(() => t.binding.setSurfaceSize(null));
       final db = _FakeDb(); // בלי רשת ובלי כונן: כשל
-      final c = QuickUpdateController(mirrorDir: tmp.path, db: db, findOtzariaDb: () async => null);
+      final c = QuickUpdateController(freeSpace: _noDf, mirrorDir: tmp.path, db: db, findOtzariaDb: () async => null);
       var closed = 0;
       await t.pumpWidget(host(QuickUpdateScreen(controller: c, autoStart: false, onClose: () => closed++)));
       await startIt(t, c);
@@ -571,7 +574,7 @@ void main() {
       });
       addTearDown(() => t.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
       final db = _FakeDb();
-      final c = QuickUpdateController(mirrorDir: tmp.path, db: db);
+      final c = QuickUpdateController(freeSpace: _noDf, mirrorDir: tmp.path, db: db);
       c
         ..note = 'הודעת בדיקה לכשל'
         ..errorDetails = 'raw details here'
