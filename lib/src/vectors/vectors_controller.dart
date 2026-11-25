@@ -136,14 +136,25 @@ class VectorsController extends ChangeNotifier {
     }
   }
 
+  /// גרסת המסד לפי ה-sha256 שלו, מהמניפסטים שמוכרים לתוכנה (המראה והרשת); null אם לא מזוהה.
+  int? _knownDbVersion(String? sha) {
+    if (sha == null) return null;
+    for (final r in [_db.mirror, _db.remote]) {
+      final m = r?.manifest;
+      if (m != null && m.full.sha256 == sha) return m.version;
+    }
+    return null;
+  }
+
   /// הוקטורים ברשת תואמים למסד שמוכן לאותה חבילה (אותה גרסה ואותו sha256)?
   String? remoteMismatch() {
     final v = remote?.manifest;
     final d = _db.remote?.manifest;
     if (v == null || d == null) return null;
-    if (v.dbVersion != d.version || v.dbSha256 != d.full.sha256) {
+    // מסד חדש מהוקטורים מותר (הוקטורים תקפים לרוב הספרים); ההתנגדות רק כשהמסד ישן מהוקטורים.
+    if (d.version < v.dbVersion) {
       return 'וקטורי החיפוש בנויים למסד גרסה ${v.dbVersion}, ואילו המסד העדכני הוא גרסה ${d.version}. '
-          'כדי שהחיפוש לא ייתן תוצאות שגויות, לא מכינים חבילה שבה הגרסאות שונות. נסו שוב מאוחר יותר.';
+          'כדי שהחיפוש לא ייתן תוצאות שגויות, לא מכינים חבילה שבה הוקטורים חדשים מהמסד. נסו שוב מאוחר יותר.';
     }
     return null;
   }
@@ -300,8 +311,9 @@ class VectorsController extends ChangeNotifier {
         onProgress: (d, t) => _progress(d, t, 'בודק את גרסת המסד'),
         isCancelled: () => _cancel,
       );
-      if (sha != m.dbSha256) {
-        _msg('הוקטורים בנויים למסד גרסה ${m.dbVersion}, והמסד שמותקן כאן שונה ממנו. קודם מעדכנים את המסד, ורק אחר כך מתקינים וקטורים.',
+      final dbVersion = _knownDbVersion(sha);
+      if (sha != m.dbSha256 && (dbVersion == null || dbVersion < m.dbVersion)) {
+        _msg('הוקטורים בנויים למסד גרסה ${m.dbVersion}, והמסד שמותקן כאן ישן ממנו או שאינו מזוהה. קודם מעדכנים את המסד, ורק אחר כך מתקינים וקטורים.',
             error: true);
         activity = null;
         notifyListeners();

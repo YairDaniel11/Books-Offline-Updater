@@ -182,7 +182,7 @@ class QuickUpdateController extends ChangeNotifier {
     if (r == null || !v.preparedComplete) return SmartSearchState.none;
     // וקטורים ישנים בכונן (למסד בגרסה אחרת מזו שבכונן) לא יתאימו למסד אחרי העדכון.
     final dbVersion = db.mirror?.manifest.version;
-    if (dbVersion != null && r.manifest.dbVersion != dbVersion) return SmartSearchState.none;
+    if (dbVersion != null && r.manifest.dbVersion > dbVersion) return SmartSearchState.none;
     final dir = v.vectorsDir;
     if (dir == null || !File(p.join(dir, 'CURRENT')).existsSync()) return SmartSearchState.noOtzariaSet;
     try {

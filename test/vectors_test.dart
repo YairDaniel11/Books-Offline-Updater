@@ -151,6 +151,14 @@ void main() {
       expect(VectorsInstaller.checkPreconditions(m, v, installedDbSha256: null), throwsA(isA<VectorsException>()));
     });
 
+    test('מסד חדש יותר (גרסה ≥ גרסת הוקטורים): עובר, ישן יותר או לא מזוהה: מסרב', () async {
+      final v = _makeVectorsDir(tmp);
+      final live = await VectorsInstaller.checkPreconditions(m, v, installedDbSha256: _h('f', 64), installedDbVersion: 52);
+      expect(live.generation, 5);
+      expect(VectorsInstaller.checkPreconditions(m, v, installedDbSha256: _h('f', 64), installedDbVersion: 50), throwsA(isA<VectorsException>()));
+      expect(VectorsInstaller.checkPreconditions(m, v, installedDbSha256: _h('f', 64), installedDbVersion: null), throwsA(isA<VectorsException>()));
+    });
+
     test('מודל אחר: מסרב', () async {
       final v = _makeVectorsDir(tmp);
       final other = VectorsManifest.parse(_bytes({..._manifestJson(), 'identityDigest': _h('9', 64)}));

@@ -68,6 +68,7 @@ class VectorsInstaller {
     VectorsManifest m,
     String vectorsDir, {
     required String? installedDbSha256,
+    int? installedDbVersion,
   }) async {
     final live = await LiveVectorSet.load(vectorsDir);
     final doc = live.doc;
@@ -77,9 +78,12 @@ class VectorsInstaller {
     if (installedDbSha256 == null) {
       throw VectorsException('מסד הספרים עוד לא צורף לאוצריא. מתקינים קודם את המסד, ואחר כך את הוקטורים.');
     }
-    if (installedDbSha256 != m.dbSha256) {
-      throw VectorsException('הוקטורים נבנו למסד גרסה ${m.dbVersion}, והמסד שמותקן כאן שונה ממנו. '
-          'מעדכנים קודם את המסד לגרסה ${m.dbVersion}, ואחר כך מתקינים את הוקטורים.');
+    // מסד חדש יותר ממה שהוקטורים נבנו לו: מתקינים (רק ספרים ששונו עלולים לפתוח שורה לא מדויקת). מסד ישן יותר או לא מזוהה: חוסמים.
+    final sameDb = installedDbSha256 == m.dbSha256;
+    final newerDb = installedDbVersion != null && installedDbVersion >= m.dbVersion;
+    if (!sameDb && !newerDb) {
+      throw VectorsException('הוקטורים נבנו למסד גרסה ${m.dbVersion}, והמסד שמותקן כאן ישן ממנו או שאינו מזוהה. '
+          'מעדכנים קודם את המסד לגרסה ${m.dbVersion} ומעלה, ואחר כך מתקינים את הוקטורים.');
     }
     for (final s in live.segments) {
       if (s['id'] == m.segment.id) throw VectorsException('הוקטורים האלה כבר מותקנים.');
@@ -99,6 +103,7 @@ class VectorsInstaller {
     required String vectorsDir,
     required String filesDir,
     required String? installedDbSha256,
+    int? installedDbVersion,
     void Function(String stage, int done, int total)? onProgress,
     bool Function()? isCancelled,
   }) async {
@@ -125,7 +130,8 @@ class VectorsInstaller {
     }
 
     // 2. תנאים.
-    final live0 = await checkPreconditions(m, vectorsDir, installedDbSha256: installedDbSha256);
+    final live0 = await checkPreconditions(m, vectorsDir,
+        installedDbSha256: installedDbSha256, installedDbVersion: installedDbVersion);
     final free = await freeDiskSpace(p.join(vectorsDir, 'segments', 'x'));
     if (free != null && free < requiredBytes(m)) {
       throw VectorsException('אין מספיק מקום פנוי בכונן של אוצריא. דרושים כ-${(requiredBytes(m) / (1 << 30)).toStringAsFixed(1)}GB.');
