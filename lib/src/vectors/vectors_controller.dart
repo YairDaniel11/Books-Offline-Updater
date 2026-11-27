@@ -195,7 +195,13 @@ class VectorsController extends ChangeNotifier {
         r,
         dest,
         onProgress: (d, t, name) => _progress(
-            d, t, t == null ? name : '${DbController.formatBytes(d)} מתוך ${DbController.formatBytes(t)}'),
+            d,
+            t,
+            t == null
+                ? name
+                : name.startsWith('בודק')
+                    ? '$name: ${DbController.formatBytes(d)} מתוך ${DbController.formatBytes(t)}'
+                    : '${DbController.formatBytes(d)} מתוך ${DbController.formatBytes(t)}'),
         isCancelled: () => _cancel,
       );
       _msg('וקטורי החיפוש הורדו (למסד גרסה ${r.manifest.dbVersion}). הקבצים בתיקייה: $dest');

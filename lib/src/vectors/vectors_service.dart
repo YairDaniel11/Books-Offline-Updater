@@ -139,8 +139,12 @@ class VectorsService {
           } finally {
             await sink.close();
           }
+          // אימות ה-SHA של קובץ גדול לוקח זמן: מדווחים התקדמות, כדי שלא ייראה שההורדה תקועה ב-100%.
           if (await tmp.length() == f.size &&
-              await sha256File(tmp.path, isCancelled: isCancelled) == f.sha256) {
+              await sha256File(tmp.path,
+                      onProgress: (d, t) => onProgress(d, t, 'בודק שההורדה תקינה'),
+                      isCancelled: isCancelled) ==
+                  f.sha256) {
             await tmp.rename(target.path);
             ok = true;
           } else {
